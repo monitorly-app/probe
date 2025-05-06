@@ -99,45 +99,60 @@ check_dependencies() {
   fi
 }
 
-# Detect OS and architecture
+# Detect Linux distribution and architecture
 detect_platform() {
   info "Detecting platform..."
 
-  # Detect OS
-  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-  case "$OS" in
-    linux)
-      OS="linux"
-      # Detect init system
-      if command -v systemctl >/dev/null 2>&1; then
-        INIT_SYSTEM="systemd"
-        SERVICE_DIR="/etc/systemd/system"
-      elif command -v service >/dev/null 2>&1; then
-        INIT_SYSTEM="sysv"
-        SERVICE_DIR="/etc/init.d"
-      else
-        warning "Could not detect init system. Service installation will be skipped."
-        INIT_SYSTEM="unknown"
-      fi
-      ;;
-    darwin)
-      OS="darwin"
-      INIT_SYSTEM="launchd"
-      SERVICE_DIR="/Library/LaunchDaemons"
-      USER_SERVICE_DIR="${HOME}/Library/LaunchAgents"
-      ;;
-    *)
-      error "Unsupported operating system: $OS"
-      ;;
-  esac
+  # Verify we're running on Linux
+  OS_TYPE=$(uname -s)
+  if [ "$OS_TYPE" != "Linux" ]; then
+    error "This installer only supports Linux. Detected OS: $OS_TYPE"
+  fi
+
+  # Detect Linux distribution
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO_NAME=$ID
+    DISTRO_VERSION=$VERSION_ID
+    DISTRO_FAMILY=""
+
+    # Determine the distribution family
+    case "$DISTRO_NAME" in
+      rhel|centos|fedora|rocky|almalinux)
+        DISTRO_FAMILY="redhat"
+        ;;
+      debian|ubuntu|linuxmint|pop)
+        DISTRO_FAMILY="debian"
+        ;;
+      *)
+        DISTRO_FAMILY="other"
+        ;;
+    esac
+  else
+    DISTRO_NAME="unknown"
+    DISTRO_VERSION="unknown"
+    DISTRO_FAMILY="other"
+  fi
+
+  # Detect init system
+  if command -v systemctl >/dev/null 2>&1; then
+    INIT_SYSTEM="systemd"
+    SERVICE_DIR="/etc/systemd/system"
+  elif command -v service >/dev/null 2>&1; then
+    INIT_SYSTEM="sysv"
+    SERVICE_DIR="/etc/init.d"
+  else
+    warning "Could not detect init system. Service installation will be skipped."
+    INIT_SYSTEM="unknown"
+  fi
 
   # Detect architecture
   ARCH=$(uname -m)
   case "$ARCH" in
-    x86_64|amd64)
+    x86_64)
       ARCH="amd64"
       ;;
-    arm64|aarch64)
+    aarch64|arm64)
       ARCH="arm64"
       ;;
     *)
@@ -145,7 +160,8 @@ detect_platform() {
       ;;
   esac
 
-  info "Detected OS: ${OS}, Architecture: ${ARCH}, Init system: ${INIT_SYSTEM}"
+  info "Detected distribution: ${DISTRO_NAME} ${DISTRO_VERSION} (${DISTRO_FAMILY})"
+  info "Architecture: ${ARCH}, Init system: ${INIT_SYSTEM}"
 }
 
 # Get the latest release version and download URL
@@ -156,7 +172,7 @@ get_latest_release() {
     info "Using specified version: ${VERSION}"
 
     # Construct the download URL directly
-    DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${VERSION}/monitorly-probe-${VERSION}-${OS}-${ARCH}"
+    DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${VERSION}/monitorly-probe-${VERSION}-linux-${ARCH}"
     info "Download URL: ${DOWNLOAD_URL}"
     return
   fi
@@ -175,14 +191,14 @@ get_latest_release() {
       info "Latest version: ${VERSION}"
 
       # Build asset name pattern (standalone binary)
-      ASSET_PATTERN="monitorly-probe-${VERSION}-${OS}-${ARCH}"
+      ASSET_PATTERN="monitorly-probe-${VERSION}-linux-${ARCH}"
 
       # Find the download URL
       if DOWNLOAD_URL=$(echo "${RELEASE_DATA}" | grep -o "\"browser_download_url\": *\"[^\"]*${ASSET_PATTERN}[^\"]*\"" | grep -o 'http[^\"]*'); then
         info "Download URL: ${DOWNLOAD_URL}"
         return
       else
-        warning "Could not find download URL for ${OS}/${ARCH} via API. Using fallback method..."
+        warning "Could not find download URL for linux-${ARCH} via API. Using fallback method..."
       fi
     fi
   else
@@ -196,7 +212,7 @@ get_latest_release() {
   info "Using fallback version: ${VERSION}"
 
   # Construct the download URL directly
-  DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${VERSION}/monitorly-probe-${VERSION}-${OS}-${ARCH}"
+  DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${VERSION}/monitorly-probe-${VERSION}-linux-${ARCH}"
   info "Fallback download URL: ${DOWNLOAD_URL}"
 }
 
@@ -354,60 +370,6 @@ WantedBy=multi-user.target"
       fi
       ;;
 
-    launchd)
-      info "Creating launchd service..."
-      PLIST_NAME="io.monitorly.probe.plist"
-
-      # Determine if we're installing as a system service or user service
-      if [ "$(id -u)" -eq 0 ]; then
-        PLIST_PATH="${SERVICE_DIR}/${PLIST_NAME}"
-        USE_USER_SERVICE=false
-      else
-        PLIST_PATH="${USER_SERVICE_DIR}/${PLIST_NAME}"
-        USE_USER_SERVICE=true
-        mkdir -p "${USER_SERVICE_DIR}"
-      fi
-
-      # Create plist content
-      PLIST_CONTENT="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
-<plist version=\"1.0\">
-<dict>
-    <key>Label</key>
-    <string>io.monitorly.probe</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${INSTALL_DIR}/monitorly-probe</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>${CONFIG_DIR}/logs/stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>${CONFIG_DIR}/logs/stderr.log</string>
-</dict>
-</plist>"
-
-      # Write plist file
-      if [ "$USE_USER_SERVICE" = true ]; then
-        echo "${PLIST_CONTENT}" > "${PLIST_PATH}"
-        success "Created user launchd service at ${PLIST_PATH}"
-        info "You can start it with: launchctl load ${PLIST_PATH}"
-      else
-        if [ "$USE_SUDO" = true ]; then
-          echo "${PLIST_CONTENT}" | sudo tee "${PLIST_PATH}" > /dev/null
-          success "Created system launchd service at ${PLIST_PATH}"
-          info "You can start it with: sudo launchctl load ${PLIST_PATH}"
-        else
-          echo "${PLIST_CONTENT}" > "${PLIST_PATH}"
-          success "Created system launchd service at ${PLIST_PATH}"
-          info "You can start it with: launchctl load ${PLIST_PATH}"
-        fi
-      fi
-      ;;
-
     sysv)
       info "Creating SysV init script..."
       INIT_SCRIPT="${SERVICE_DIR}/monitorly-probe"
@@ -497,6 +459,67 @@ exit 0"
   esac
 }
 
+# Set up distribution-specific configurations
+setup_distro_specific() {
+  case "$DISTRO_FAMILY" in
+    redhat)
+      info "Setting up Red Hat family specific configurations..."
+
+      # For SELinux systems, set the proper context
+      if command -v sestatus >/dev/null 2>&1 && sestatus | grep -q "SELinux status: *enabled"; then
+        if [ "$USE_SUDO" = true ]; then
+          info "SELinux detected, setting appropriate context"
+          sudo chcon -t bin_t "${INSTALL_DIR}/monitorly-probe"
+        fi
+      fi
+
+      # Create logrotate configuration
+      if [ -d /etc/logrotate.d ]; then
+        LOGROTATE_CONFIG="/etc/logrotate.d/monitorly-probe"
+        LOGROTATE_CONTENT="${CONFIG_DIR}/logs/*.log {
+    weekly
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+}"
+        if [ "$USE_SUDO" = true ]; then
+          echo "${LOGROTATE_CONTENT}" | sudo tee "${LOGROTATE_CONFIG}" > /dev/null
+          success "Created logrotate configuration"
+        fi
+      fi
+      ;;
+
+    debian)
+      info "Setting up Debian family specific configurations..."
+
+      # Create logrotate configuration
+      if [ -d /etc/logrotate.d ]; then
+        LOGROTATE_CONFIG="/etc/logrotate.d/monitorly-probe"
+        LOGROTATE_CONTENT="${CONFIG_DIR}/logs/*.log {
+    weekly
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+}"
+        if [ "$USE_SUDO" = true ]; then
+          echo "${LOGROTATE_CONTENT}" | sudo tee "${LOGROTATE_CONFIG}" > /dev/null
+          success "Created logrotate configuration"
+        fi
+      fi
+      ;;
+
+    *)
+      info "No distribution-specific configurations to apply"
+      ;;
+  esac
+}
+
 # Display post-installation instructions
 show_instructions() {
   echo
@@ -524,21 +547,6 @@ show_instructions() {
       echo -e "  ${BLUE}sudo systemctl status monitorly-probe${NC}  # Check status"
       echo -e "  ${BLUE}sudo journalctl -u monitorly-probe${NC}     # View logs"
       ;;
-    launchd)
-      if [ "$USE_USER_SERVICE" = true ]; then
-        echo -e "To manage the Monitorly Probe service:"
-        echo -e "  ${BLUE}launchctl load ${USER_SERVICE_DIR}/io.monitorly.probe.plist${NC}    # Start the service"
-        echo -e "  ${BLUE}launchctl unload ${USER_SERVICE_DIR}/io.monitorly.probe.plist${NC}  # Stop the service"
-        echo -e "  ${BLUE}launchctl list | grep monitorly${NC}                                # Check status"
-      else
-        echo -e "To manage the Monitorly Probe service:"
-        echo -e "  ${BLUE}sudo launchctl load ${SERVICE_DIR}/io.monitorly.probe.plist${NC}    # Start the service"
-        echo -e "  ${BLUE}sudo launchctl unload ${SERVICE_DIR}/io.monitorly.probe.plist${NC}  # Stop the service"
-        echo -e "  ${BLUE}sudo launchctl list | grep monitorly${NC}                           # Check status"
-      fi
-      echo -e "  ${BLUE}tail -f ${CONFIG_DIR}/logs/stdout.log${NC}                          # View standard output"
-      echo -e "  ${BLUE}tail -f ${CONFIG_DIR}/logs/stderr.log${NC}                          # View error output"
-      ;;
     sysv)
       echo -e "To manage the Monitorly Probe service:"
       echo -e "  ${BLUE}sudo service monitorly-probe start${NC}    # Start the service"
@@ -554,15 +562,15 @@ show_instructions() {
   esac
 
   echo
-  echo -e "Visit ${BLUE}https://monitorly.io/docs${NC} for more information."
-  echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
+  echo -e "Visit ${BLUE}https://github.com/monitorly-app/probe${NC} for more information."
+  echo -e "${GREEN}═════════════════════════════════════════════════════════${NC}"
 }
 
 # Main installation process
 main() {
-  echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
-  echo -e "${GREEN}          Monitorly Probe Installer${NC}"
-  echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}═════════════════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}                Monitorly Probe Installer                ${NC}"
+  echo -e "${GREEN}═════════════════════════════════════════════════════════${NC}"
   echo
 
   parse_args "$@"
@@ -572,6 +580,7 @@ main() {
   download_and_install
   download_config
   setup_service
+  setup_distro_specific
   show_instructions
 }
 

@@ -13,6 +13,12 @@ A lightweight server monitoring probe that collects system metrics and sends the
 - Smart config file discovery
 - Low resource footprint
 
+## Supported Platforms
+
+- Linux (amd64, arm64)
+  - Debian-based distributions (Debian, Ubuntu, etc.)
+  - RHEL-based distributions (Red Hat, CentOS, Fedora, Rocky Linux, etc.)
+
 ## Quick Installation
 
 The easiest way to install Monitorly Probe is by using our installation script:
@@ -22,12 +28,13 @@ curl -sSL https://raw.githubusercontent.com/monitorly-app/probe/main/install.sh 
 ```
 
 The installer will:
-1. Detect your operating system and architecture
+1. Detect your Linux distribution and architecture
 2. Download the appropriate binary from the latest release
 3. Install the probe to `/usr/local/bin/`
 4. Set up a configuration file in `~/.monitorly/`
-5. Create a system service appropriate for your OS
-6. Provide instructions for completing setup
+5. Create a system service appropriate for your distribution (systemd or SysV init)
+6. Apply distribution-specific configurations (SELinux context, logrotate, etc.)
+7. Provide instructions for completing setup
 
 ### Installation Options
 
@@ -151,14 +158,13 @@ After the GitHub Actions workflow completes, the new release will be available o
 
 ### Release Artifacts
 
-Each release includes the following artifacts for all supported platforms:
+Each release includes the following artifacts for Linux platforms:
 - Standalone executables for direct use
 - Archive packages containing the executable and an example configuration file
 
-Available platforms:
-- Linux (amd64, arm64)
-- macOS (amd64, arm64)
-- Windows (amd64)
+Available architectures:
+- amd64 (x86_64)
+- arm64 (aarch64)
 
 Choose the standalone executable if you:
 - Want the simplest installation process

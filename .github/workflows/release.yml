@@ -3,7 +3,7 @@ name: Release Build
 on:
   push:
     tags:
-      - 'v*.*.*' # Run workflow on version tags, e.g. v1.0.0
+      - 'v*' # Run workflow on version tags, e.g. v1.0.0
 
 permissions:
   contents: write # Needed for creating releases
@@ -14,12 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux, windows, darwin]
         goarch: [amd64, arm64]
-        exclude:
-          # Exclude builds that don't make sense
-          - goos: windows
-            goarch: arm64
 
     steps:
       - name: Checkout code
@@ -39,7 +34,7 @@ jobs:
 
       - name: Build executable
         env:
-          GOOS: ${{ matrix.goos }}
+          GOOS: linux
           GOARCH: ${{ matrix.goarch }}
         run: |
           # Create output directory
@@ -47,10 +42,6 @@ jobs:
 
           # Build the executable
           BINARY_NAME=monitorly-probe
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME=${BINARY_NAME}.exe
-          fi
-
           go build -v -ldflags="-X 'main.Version=${{ env.VERSION }}'" -o release/${BINARY_NAME} ./cmd/probe
 
           # Create archive with executable + config example
@@ -58,30 +49,23 @@ jobs:
           cp ../config.yaml.example config.yaml.example
 
           # Create both the standalone binary and the archive
-          BINARY_NAME_WITH_META=monitorly-probe-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          BINARY_NAME_WITH_META=monitorly-probe-${{ env.VERSION }}-linux-${{ matrix.goarch }}
 
-          # Rename the binary with metadata for standalone distribution
+          # Copy the binary with metadata for standalone distribution
           cp ${BINARY_NAME} ${BINARY_NAME_WITH_META}
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            cp ${BINARY_NAME} ${BINARY_NAME_WITH_META}.exe
-          fi
 
           # Create archive with executable + config
-          ARCHIVE_NAME=monitorly-probe-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}-with-config
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip -r ${ARCHIVE_NAME}.zip ${BINARY_NAME} config.yaml.example
-          else
-            tar -czf ${ARCHIVE_NAME}.tar.gz ${BINARY_NAME} config.yaml.example
-          fi
+          ARCHIVE_NAME=monitorly-probe-${{ env.VERSION }}-linux-${{ matrix.goarch }}-with-config
+          tar -czf ${ARCHIVE_NAME}.tar.gz ${BINARY_NAME} config.yaml.example
           cd ..
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: monitorly-probe-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: monitorly-probe-${{ env.VERSION }}-linux-${{ matrix.goarch }}
           path: |
-            release/monitorly-probe-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}*
-            release/*.{zip,tar.gz}
+            release/*.tar.gz
+            release/monitorly-probe-${{ env.VERSION }}-linux-${{ matrix.goarch }}
           retention-days: 1
 
   create-release:
@@ -97,6 +81,40 @@ jobs:
         with:
           path: artifacts
 
+      - name: Organize artifacts for release
+        id: organize
+        run: |
+          mkdir -p release_files
+
+          # Get a list of all artifact files
+          echo "Found files in artifacts directory:"
+          find artifacts -type f -not -path "*/\.*" | sort
+
+          # First copy the archive files (.tar.gz)
+          echo "Copying archive files..."
+          find artifacts -name "*.tar.gz" | while read file; do
+            filename=$(basename "$file")
+            echo "Copying archive: $filename"
+            cp "$file" "release_files/${filename}"
+          done
+
+          # Then copy the binary files
+          echo "Copying binary files..."
+          find artifacts -type f -not -name "*.tar.gz" | while read file; do
+            filename=$(basename "$file")
+            # Skip non-executable files (in case there are any)
+            if [[ "$filename" != monitorly-probe-* ]]; then
+              echo "Skipping non-binary file: $filename"
+              continue
+            fi
+
+            echo "Copying binary: $filename"
+            cp "$file" "release_files/${filename}"
+          done
+
+          echo "Files prepared for release:"
+          ls -la release_files
+
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -105,7 +123,4 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-          files: |
-            artifacts/**/*.zip
-            artifacts/**/*.tar.gz
-            artifacts/**/monitorly-probe-*
+          files: release_files/*
