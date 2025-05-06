@@ -63,3 +63,4 @@ You are an expert in Go and clean development practices. Your role is to ensure 
 - The project is about developing a lightweight server probe that monitor a variety of metrics of the host it is installed on, and send them to a central API that will provide dashboard for its users.
 - In production mode, a single configuration file will be the only manual action for the customer, and then the probe will start transmitting information
 - Detailed project specifications are available in the 'docs' folder as markdown files
+- When making changes, perform update to the 'README.md' file when deemed necessary

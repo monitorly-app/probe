@@ -1,0 +1,41 @@
+collection:
+  # CPU metrics collection settings
+  cpu:
+    enabled: true           # Enable/disable CPU metrics collection
+    interval: 5s            # Collection interval (e.g., 5s, 1m, 1h)
+
+  # RAM metrics collection settings
+  ram:
+    enabled: true           # Enable/disable RAM metrics collection
+    interval: 10s           # Collection interval
+
+  # Disk metrics collection settings
+  disk:
+    enabled: true           # Enable/disable disk metrics collection
+    interval: 30s           # Collection interval
+    mount_points:           # List of mount points to monitor
+      - path: "/"           # Path to the mount point
+        label: "root"       # User-friendly label for the mount point
+        collect_usage: true  # Collect disk usage in bytes
+        collect_percent: true # Collect disk usage as percentage
+      - path: "/home"
+        label: "home"
+        collect_percent: true
+
+# Sender configuration
+sender:
+  target: "log_file"        # Where to send metrics: "api" or "log_file"
+  send_interval: 30s        # How often to send collected metrics
+
+# API configuration (required if sender.target is "api")
+api:
+  url: "https://api.example.com/metrics"  # API endpoint
+  key: "your-api-key"                     # API authentication key
+
+# Log file configuration (used if sender.target is "log_file")
+log_file:
+  path: "logs/metrics.log"  # Path where metrics will be logged
+
+# Application logging configuration
+logging:
+  file_path: "logs/monitorly.log"  # Path for application logs
