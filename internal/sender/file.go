@@ -2,13 +2,12 @@ package sender
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/monitorly-app/probe/internal/collector"
+	"github.com/monitorly-app/probe/internal/serialization"
 )
 
 // FileLogger implements the Sender interface for logging metrics to a file
@@ -51,38 +50,9 @@ func (f *FileLogger) SendWithContext(ctx context.Context, metrics []collector.Me
 	}
 	defer file.Close()
 
-	// For each metric, format and write to the file
-	for _, metric := range metrics {
-		// Check for context cancellation periodically
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while writing metrics: %w", ctx.Err())
-		default:
-			// Continue processing
-		}
-
-		// Add a timestamp for when the log entry was written
-		entry := struct {
-			LogTime time.Time         `json:"log_time"`
-			Metric  collector.Metrics `json:"metric"`
-		}{
-			LogTime: time.Now(),
-			Metric:  metric,
-		}
-
-		// Marshal to JSON
-		jsonData, err := json.MarshalIndent(entry, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal metric: %w", err)
-		}
-
-		// Write to file with a newline
-		if _, err := file.Write(jsonData); err != nil {
-			return fmt.Errorf("failed to write to log file: %w", err)
-		}
-		if _, err := file.WriteString("\n"); err != nil {
-			return fmt.Errorf("failed to write newline to log file: %w", err)
-		}
+	// Use the serialization package to write metrics
+	if err := serialization.WriteMetricsTo(file, metrics, true); err != nil {
+		return fmt.Errorf("failed to write metrics to log file: %w", err)
 	}
 
 	return nil

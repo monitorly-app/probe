@@ -22,7 +22,7 @@ func NewDiskCollector(mountPoints []config.MountPoint) collector.Collector {
 
 // Collect gathers disk metrics for specified mount points
 func (c *DiskCollector) Collect() ([]collector.Metrics, error) {
-	metrics := make([]collector.Metrics, 0, len(c.MountPoints)*2) // Potentially 2 metrics per mount point
+	metrics := make([]collector.Metrics, 0, len(c.MountPoints)) // One metric per mount point
 	now := time.Now()
 
 	for _, mp := range c.MountPoints {
@@ -37,36 +37,28 @@ func (c *DiskCollector) Collect() ([]collector.Metrics, error) {
 			"label":      mp.Label,
 		}
 
-		// Add percentage metric if configured
+		// Create a merged value with all requested metrics
+		diskMetric := map[string]interface{}{}
+
 		if mp.CollectPercent {
 			percentValue := collector.RoundToTwoDecimalPlaces(diskInfo.UsedPercent)
-			metrics = append(metrics, collector.Metrics{
-				Timestamp: now,
-				Category:  collector.CategorySystem,
-				Name:      collector.NameDisk,
-				Metadata:  metadata,
-				Value: map[string]interface{}{
-					"type":    "percent",
-					"percent": percentValue,
-				},
-			})
+			diskMetric["percent"] = percentValue
 		}
 
-		// Add usage amount metric if configured
 		if mp.CollectUsage {
-			metrics = append(metrics, collector.Metrics{
-				Timestamp: now,
-				Category:  collector.CategorySystem,
-				Name:      collector.NameDisk,
-				Metadata:  metadata,
-				Value: map[string]interface{}{
-					"type":      "usage",
-					"used":      diskInfo.Used,
-					"total":     diskInfo.Total,
-					"available": diskInfo.Free,
-				},
-			})
+			diskMetric["used"] = diskInfo.Used
+			diskMetric["total"] = diskInfo.Total
+			diskMetric["available"] = diskInfo.Free
 		}
+
+		// Add the combined metric for this mount point
+		metrics = append(metrics, collector.Metrics{
+			Timestamp: now,
+			Category:  collector.CategorySystem,
+			Name:      collector.NameDisk,
+			Metadata:  metadata,
+			Value:     diskMetric,
+		})
 	}
 
 	return metrics, nil

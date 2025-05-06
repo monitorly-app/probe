@@ -3,12 +3,12 @@ package sender
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/monitorly-app/probe/internal/collector"
+	"github.com/monitorly-app/probe/internal/serialization"
 )
 
 // APISender implements the Sender interface for API-based metric sending
@@ -36,7 +36,7 @@ func (s *APISender) Send(metrics []collector.Metrics) error {
 
 // SendWithContext sends metrics to the configured API endpoint with context support
 func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Metrics) error {
-	payload, err := json.Marshal(metrics)
+	payload, err := serialization.SerializeMetrics(metrics)
 	if err != nil {
 		return fmt.Errorf("error marshalling metrics: %w", err)
 	}
