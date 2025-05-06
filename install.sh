@@ -311,7 +311,7 @@ sender:
 
 # API configuration (required if sender.target is "api")
 api:
-  url: "https://api.monitorly.io/metrics"
+  url: "https://api.monitorly.app/metrics"
   project_id: "YOUR_PROJECT_ID"
   application_token: "YOUR_APP_TOKEN"
 
