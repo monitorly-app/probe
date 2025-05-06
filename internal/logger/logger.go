@@ -9,9 +9,16 @@ import (
 	"sync"
 )
 
+// LoggerInterface defines the interface for logging operations
+type LoggerInterface interface {
+	Printf(format string, v ...interface{})
+	Fatalf(format string, v ...interface{})
+	Close() error
+}
+
 var (
 	// Default logger instance
-	defaultLogger *Logger
+	defaultLogger LoggerInterface
 	once          sync.Once
 )
 
@@ -26,22 +33,28 @@ type Logger struct {
 func Initialize(logFilePath string) error {
 	var err error
 	once.Do(func() {
-		err = initializeLogger(logFilePath)
+		logger, initErr := NewLogger(logFilePath)
+		if initErr != nil {
+			err = initErr
+			return
+		}
+		defaultLogger = logger
 	})
 	return err
 }
 
-func initializeLogger(logFilePath string) error {
+// NewLogger creates a new instance of Logger with the specified log file path
+func NewLogger(logFilePath string) (*Logger, error) {
 	// Create directory for log file if it doesn't exist
 	dir := filepath.Dir(logFilePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory for log file: %w", err)
+		return nil, fmt.Errorf("failed to create directory for log file: %w", err)
 	}
 
 	// Open log file
 	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to open log file: %w", err)
+		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 
 	// Create multi-writer to write to both stdout and log file
@@ -53,22 +66,30 @@ func initializeLogger(logFilePath string) error {
 	// Create file-only logger for the full log format
 	fileLogger := log.New(logFile, "", log.Ldate|log.Ltime)
 
-	defaultLogger = &Logger{
+	logger := &Logger{
 		stdLog:  stdLogger,
 		fileLog: fileLogger,
 		logFile: logFile,
 	}
 
 	// Log initialization
-	Printf("Logging initialized to file: %s", logFilePath)
+	logger.Printf("Logging initialized to file: %s", logFilePath)
 
-	return nil
+	return logger, nil
 }
 
 // Close closes the log file
 func Close() error {
-	if defaultLogger != nil && defaultLogger.logFile != nil {
-		return defaultLogger.logFile.Close()
+	if defaultLogger != nil {
+		return defaultLogger.Close()
+	}
+	return nil
+}
+
+// Close closes the log file for a specific logger instance
+func (l *Logger) Close() error {
+	if l.logFile != nil {
+		return l.logFile.Close()
 	}
 	return nil
 }
@@ -81,8 +102,13 @@ func Printf(format string, v ...interface{}) {
 		return
 	}
 
+	defaultLogger.Printf(format, v...)
+}
+
+// Printf logs a formatted message for a specific logger instance
+func (l *Logger) Printf(format string, v ...interface{}) {
 	msg := fmt.Sprintf(format, v...)
-	defaultLogger.stdLog.Print(msg)
+	l.stdLog.Print(msg)
 }
 
 // Fatalf logs a formatted message and exits the program
@@ -93,7 +119,12 @@ func Fatalf(format string, v ...interface{}) {
 		return
 	}
 
+	defaultLogger.Fatalf(format, v...)
+}
+
+// Fatalf logs a formatted message and exits the program for a specific logger instance
+func (l *Logger) Fatalf(format string, v ...interface{}) {
 	msg := fmt.Sprintf(format, v...)
-	defaultLogger.stdLog.Print(msg)
+	l.stdLog.Print(msg)
 	os.Exit(1)
 }

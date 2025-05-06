@@ -8,19 +8,15 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 )
 
-type Metrics struct {
-	Timestamp time.Time `json:"timestamp"`
-	CPUUsage  float64   `json:"cpu_usage"`
-	RAMUsage  float64   `json:"ram_usage"`
-	DiskUsage float64   `json:"disk_usage"`
-}
-
+// SystemCollector implements the Collector interface for system metrics
 type SystemCollector struct{}
 
-func NewSystemCollector() *SystemCollector {
+// NewSystemCollector creates a new instance of SystemCollector
+func NewSystemCollector() Collector {
 	return &SystemCollector{}
 }
 
+// Collect gathers system metrics
 func (c *SystemCollector) Collect() (Metrics, error) {
 	metrics := Metrics{
 		Timestamp: time.Now(),

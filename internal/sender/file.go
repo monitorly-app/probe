@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,17 +11,33 @@ import (
 	"github.com/monitorly-app/probe/internal/collector"
 )
 
+// FileLogger implements the Sender interface for logging metrics to a file
 type FileLogger struct {
 	filePath string
 }
 
+// NewFileLogger creates a new instance of FileLogger
 func NewFileLogger(filePath string) *FileLogger {
 	return &FileLogger{
 		filePath: filePath,
 	}
 }
 
+// Send logs metrics to a file
 func (f *FileLogger) Send(metrics []collector.Metrics) error {
+	return f.SendWithContext(context.Background(), metrics)
+}
+
+// SendWithContext logs metrics to a file with context support
+func (f *FileLogger) SendWithContext(ctx context.Context, metrics []collector.Metrics) error {
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("context cancelled: %w", ctx.Err())
+	default:
+		// Continue processing
+	}
+
 	// Ensure directory exists
 	dir := filepath.Dir(f.filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -36,6 +53,14 @@ func (f *FileLogger) Send(metrics []collector.Metrics) error {
 
 	// For each metric, format and write to the file
 	for _, metric := range metrics {
+		// Check for context cancellation periodically
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while writing metrics: %w", ctx.Err())
+		default:
+			// Continue processing
+		}
+
 		// Add a timestamp for when the log entry was written
 		entry := struct {
 			LogTime time.Time         `json:"log_time"`
