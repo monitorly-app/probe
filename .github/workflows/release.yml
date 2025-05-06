@@ -1,0 +1,111 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*' # Run workflow on version tags, e.g. v1.0.0
+
+permissions:
+  contents: write # Needed for creating releases
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          # Exclude builds that don't make sense
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+
+      - name: Build executable
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          # Create output directory
+          mkdir -p release
+
+          # Build the executable
+          BINARY_NAME=monitorly-probe
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME=${BINARY_NAME}.exe
+          fi
+
+          go build -v -ldflags="-X 'main.Version=${{ env.VERSION }}'" -o release/${BINARY_NAME} ./cmd/probe
+
+          # Create archive with executable + config example
+          cd release
+          cp ../config.yaml.example config.yaml.example
+
+          # Create both the standalone binary and the archive
+          BINARY_NAME_WITH_META=monitorly-probe-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}
+
+          # Rename the binary with metadata for standalone distribution
+          cp ${BINARY_NAME} ${BINARY_NAME_WITH_META}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            cp ${BINARY_NAME} ${BINARY_NAME_WITH_META}.exe
+          fi
+
+          # Create archive with executable + config
+          ARCHIVE_NAME=monitorly-probe-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}-with-config
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip -r ${ARCHIVE_NAME}.zip ${BINARY_NAME} config.yaml.example
+          else
+            tar -czf ${ARCHIVE_NAME}.tar.gz ${BINARY_NAME} config.yaml.example
+          fi
+          cd ..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitorly-probe-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            release/monitorly-probe-${{ env.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}*
+            release/*.{zip,tar.gz}
+          retention-days: 1
+
+  create-release:
+    name: Create Release
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Monitorly Probe ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
+            artifacts/**/monitorly-probe-*

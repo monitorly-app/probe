@@ -20,6 +20,9 @@ import (
 	"github.com/monitorly-app/probe/internal/sender"
 )
 
+// Version is set during build using ldflags
+var Version = "dev"
+
 // searchPaths returns a list of locations to search for the config file
 func searchPaths(configFlag string) []string {
 	// If config flag is set, that's the primary location
@@ -70,7 +73,16 @@ func findConfigFile(configFlag string) (string, error) {
 func main() {
 	// Parse command-line flags
 	configPath := flag.String("config", "config.yaml", "Path to the configuration file")
+	showVersion := flag.Bool("version", false, "Show version information and exit")
 	flag.Parse()
+
+	// If version flag is provided, print version and exit
+	if *showVersion {
+		fmt.Printf("Monitorly Probe v%s\n", Version)
+		return
+	}
+
+	log.Printf("Starting Monitorly Probe v%s", Version)
 
 	// Find the config file
 	absConfigPath, err := findConfigFile(*configPath)

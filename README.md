@@ -1,4 +1,4 @@
-# Monitorly Probe
+# Monitorly Probe v0.1.0
 
 A lightweight server monitoring probe that collects system metrics and sends them to a central API or logs them to a file.
 
@@ -12,6 +12,37 @@ A lightweight server monitoring probe that collects system metrics and sends the
 - Auto-reloading when config file changes
 - Smart config file discovery
 - Low resource footprint
+
+## Quick Installation
+
+The easiest way to install Monitorly Probe is by using our installation script:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/monitorly-app/probe/main/install.sh | bash
+```
+
+The installer will:
+1. Detect your operating system and architecture
+2. Download the appropriate binary from the latest release
+3. Install the probe to `/usr/local/bin/`
+4. Set up a configuration file in `~/.monitorly/`
+5. Create a system service appropriate for your OS
+6. Provide instructions for completing setup
+
+### Installation Options
+
+You can specify a particular version to install:
+
+```bash
+# Install a specific version
+curl -sSL https://raw.githubusercontent.com/monitorly-app/probe/main/install.sh | bash -s -- --version 1.0.0
+```
+
+Available options:
+- `-v, --version VERSION` - Install a specific version
+- `-h, --help` - Show help information
+
+After installation, you'll need to edit the configuration file to suit your needs, particularly if you want to send metrics to the Monitorly API.
 
 ## Setup for Development
 
@@ -93,6 +124,51 @@ Group=monitorly
 [Install]
 WantedBy=multi-user.target
 ```
+
+## Releases and Versioning
+
+The Monitorly Probe uses semantic versioning. Releases are created by tagging the repository with a version number (e.g., `v1.0.0`), which automatically triggers a GitHub Actions workflow to:
+
+1. Build executables for multiple platforms (Linux, Windows, macOS)
+2. Package executables with example configuration
+3. Create a GitHub Release with the built artifacts
+
+### Creating a Release
+
+To create a new release:
+
+1. Ensure all changes are committed and merged to the main branch
+2. Run the release script with the new version number:
+   ```bash
+   ./scripts/release.sh 1.0.0
+   ```
+3. Push the tag to GitHub to trigger the build:
+   ```bash
+   git push origin v1.0.0
+   ```
+
+After the GitHub Actions workflow completes, the new release will be available on the GitHub Releases page with downloadable executables for all supported platforms.
+
+### Release Artifacts
+
+Each release includes the following artifacts for all supported platforms:
+- Standalone executables for direct use
+- Archive packages containing the executable and an example configuration file
+
+Available platforms:
+- Linux (amd64, arm64)
+- macOS (amd64, arm64)
+- Windows (amd64)
+
+Choose the standalone executable if you:
+- Want the simplest installation process
+- Already have your own configuration file
+- Prefer lightweight deployment
+
+Choose the archive package if you:
+- Are new to Monitorly Probe
+- Want a configuration template to get started
+- Need both files bundled together
 
 ## Configuration Auto-Reloading
 

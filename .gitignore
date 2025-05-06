@@ -1,2 +1,4 @@
 bin/**
 *.log
+config.yaml
+TODO.md
