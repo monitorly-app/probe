@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/monitorly-app/probe/internal/collector"
 	"github.com/monitorly-app/probe/internal/collector/system"
 	"github.com/monitorly-app/probe/internal/config"
@@ -16,7 +20,64 @@ import (
 	"github.com/monitorly-app/probe/internal/sender"
 )
 
+// searchPaths returns a list of locations to search for the config file
+func searchPaths(configFlag string) []string {
+	// If config flag is set, that's the primary location
+	paths := []string{configFlag}
+
+	// Common locations for the config file
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		homePath := filepath.Join(homeDir, ".monitorly", "config.yaml")
+		paths = append(paths, homePath)
+	}
+
+	// Add other common locations
+	paths = append(paths,
+		"config.yaml",                // Current directory
+		"configs/config.yaml",        // Common configs directory
+		"/etc/monitorly/config.yaml", // System-wide config location
+	)
+
+	return paths
+}
+
+// findConfigFile tries to find a config file in common locations
+func findConfigFile(configFlag string) (string, error) {
+	paths := searchPaths(configFlag)
+
+	// Try each path
+	for _, path := range paths {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			continue // Skip this path if we can't get the absolute path
+		}
+
+		if _, err := os.Stat(absPath); err == nil {
+			log.Printf("Using config file: %s", absPath)
+			return absPath, nil
+		}
+	}
+
+	// If an explicit config path was provided but not found, that's an error
+	if configFlag != "config.yaml" {
+		return "", fmt.Errorf("specified config file not found: %s", configFlag)
+	}
+
+	return "", fmt.Errorf("no config file found in search paths")
+}
+
 func main() {
+	// Parse command-line flags
+	configPath := flag.String("config", "config.yaml", "Path to the configuration file")
+	flag.Parse()
+
+	// Find the config file
+	absConfigPath, err := findConfigFile(*configPath)
+	if err != nil {
+		log.Fatalf("Failed to find config file: %v", err)
+	}
+
 	// Set up context with cancellation for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -26,17 +87,114 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		sig := <-signalChan
-		logger.Printf("Received signal: %v. Shutting down...", sig)
+		log.Printf("Received signal: %v. Shutting down...", sig)
 		cancel()
 	}()
 
-	// Load configuration
-	cfg, err := config.Load("config.yaml")
+	// Create configuration watcher
+	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		// Use standard log here since logger isn't initialized yet
+		log.Fatalf("Failed to create file watcher: %v", err)
+	}
+	defer watcher.Close()
+
+	// Add the config file directory to the watcher
+	configDir := filepath.Dir(absConfigPath)
+	if err := watcher.Add(configDir); err != nil {
+		log.Fatalf("Failed to watch config directory: %v", err)
+	}
+
+	// Initialize configuration
+	cfg, err := loadConfig(absConfigPath)
+	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
+	// Set up a channel to restart the application on config changes
+	restartChan := make(chan struct{})
+
+	// Start config watcher goroutine
+	go watchConfigFile(ctx, watcher, absConfigPath, restartChan)
+
+	// Main application loop
+	for {
+		// Start the application with the current config
+		appCtx, appCancel := context.WithCancel(ctx)
+		appWg := runApp(appCtx, cfg)
+
+		// Wait for either a config change or application shutdown
+		select {
+		case <-ctx.Done():
+			// Global shutdown requested
+			appCancel()
+			appWg.Wait()
+			return
+		case <-restartChan:
+			// Config changed, reload and restart
+			log.Println("Configuration changed, restarting...")
+			appCancel()
+			appWg.Wait()
+
+			// Load the new configuration
+			newCfg, err := loadConfig(absConfigPath)
+			if err != nil {
+				log.Printf("Error loading new configuration: %v, continuing with old config", err)
+				continue
+			}
+			cfg = newCfg
+		}
+	}
+}
+
+// loadConfig loads the configuration from the specified path
+func loadConfig(path string) (*config.Config, error) {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// watchConfigFile monitors the config file for changes
+func watchConfigFile(ctx context.Context, watcher *fsnotify.Watcher, configPath string, restartChan chan struct{}) {
+	configFileName := filepath.Base(configPath)
+	configDir := filepath.Dir(configPath)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+
+			// Check if this event is for our config file
+			if filepath.Base(event.Name) == configFileName && filepath.Dir(event.Name) == configDir {
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+					// Wait a short time to ensure the file is fully written
+					time.Sleep(100 * time.Millisecond)
+
+					// Signal a restart
+					select {
+					case restartChan <- struct{}{}:
+						log.Printf("Detected change to config file: %s", configPath)
+					default:
+						// A restart is already pending, no need to send again
+					}
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("Error watching config file: %v", err)
+		}
+	}
+}
+
+// runApp starts the application with the given configuration
+func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 	// Initialize logger
 	if err := logger.Initialize(cfg.Logging.FilePath); err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
@@ -63,8 +221,13 @@ func main() {
 
 	switch cfg.Sender.Target {
 	case "api":
-		metricSender = sender.NewAPISender(cfg.API.URL, cfg.API.Key, machineName)
-		logger.Printf("Metrics will be sent to API: %s", cfg.API.URL)
+		metricSender = sender.NewAPISender(
+			cfg.API.URL,
+			cfg.API.ProjectID,
+			cfg.API.ApplicationToken,
+			machineName,
+		)
+		logger.Printf("Metrics will be sent to API: %s for project: %s", cfg.API.URL, cfg.API.ProjectID)
 	case "log_file":
 		metricSender = sender.NewFileLogger(cfg.LogFile.Path)
 		logger.Printf("Metrics will be logged to file: %s", cfg.LogFile.Path)
@@ -113,26 +276,13 @@ func main() {
 		sendRoutine(ctx, metricSender, metricsChan, cfg.Sender.SendInterval)
 	}()
 
-	// Wait for context cancellation (from signal handler)
-	<-ctx.Done()
-	logger.Printf("Context canceled, shutting down gracefully...")
-
-	// Wait for goroutines to finish with a timeout
-	waitChan := make(chan struct{})
+	// Setup a goroutine to wait for the context to be done
 	go func() {
-		wg.Wait()
-		close(waitChan)
+		<-ctx.Done()
+		logger.Printf("Context canceled, shutting down collectors and sender...")
 	}()
 
-	// Add a timeout for shutdown
-	select {
-	case <-waitChan:
-		logger.Printf("All goroutines finished")
-	case <-time.After(5 * time.Second):
-		logger.Printf("Timed out waiting for goroutines to finish")
-	}
-
-	logger.Printf("Monitorly probe shutdown complete")
+	return &wg
 }
 
 func collectRoutine(ctx context.Context, name string, collector collector.Collector, metricsChan chan []collector.Metrics, interval time.Duration) {

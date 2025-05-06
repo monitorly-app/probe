@@ -9,6 +9,8 @@ A lightweight server monitoring probe that collects system metrics and sends the
 - Flexible disk monitoring with support for multiple mount points
 - Machine identification for multi-server monitoring
 - Metrics can be sent to a central API or logged to a local file
+- Auto-reloading when config file changes
+- Smart config file discovery
 - Low resource footprint
 
 ## Setup for Development
@@ -54,8 +56,54 @@ vim config.yaml
 6. Run the application:
 
 ```bash
+# The probe will automatically find your config file
 ./bin/monitorly-probe
+
+# Or specify a custom config path
+./bin/monitorly-probe -config /etc/monitorly/config.yaml
 ```
+
+## Config File Discovery
+
+The probe automatically searches for a configuration file in these locations (in order):
+
+1. Path specified with the `-config` flag (if provided)
+2. `~/.monitorly/config.yaml` (in user's home directory)
+3. `config.yaml` (in the current working directory)
+4. `configs/config.yaml` (in a configs subdirectory)
+5. `/etc/monitorly/config.yaml` (system-wide configuration)
+
+This means that during development, you can simply place a `config.yaml` file in the project directory, and the probe will find it automatically without any command-line arguments.
+
+## Using as a System Service
+
+The probe can be run as a system service using systemd, upstart, or other service managers. Here's an example systemd service file:
+
+```ini
+[Unit]
+Description=Monitorly Probe
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/monitorly-probe -config /etc/monitorly/config.yaml
+Restart=always
+User=monitorly
+Group=monitorly
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## Configuration Auto-Reloading
+
+The probe automatically monitors its configuration file for changes. When the file is modified, the probe will:
+
+1. Detect the change
+2. Load the new configuration
+3. Gracefully shut down existing collectors and senders
+4. Start new collectors and senders with the updated configuration
+
+This allows you to modify the configuration without restarting the service manually.
 
 ## Configuration
 
@@ -97,8 +145,9 @@ sender:
 
 # API configuration (required if sender.target is "api")
 api:
-  url: "https://api.example.com/metrics"  # API endpoint
-  key: "your-api-key"                     # API authentication key
+  url: "https://api.example.com/metrics"              # API endpoint
+  project_id: "00000000-0000-0000-0000-000000000000"  # Project ID (UUID) to identify your project
+  application_token: "your-application-token"         # Application token for authentication
 
 # Log file configuration (used if sender.target is "log_file")
 log_file:
@@ -117,6 +166,13 @@ The `machine_name` setting allows you to specify a custom identifier for the ser
 - When logging to file: Machine name is not included (assumed to be local to the machine)
 - If not specified, the system hostname will be used automatically
 - This helps distinguish metrics from different servers in a central monitoring system
+
+### API Authentication
+
+When sending metrics to the API, the following fields are used:
+
+- `project_id`: UUID that identifies your project within the Monitorly system (included in the URL)
+- `application_token`: Authentication token used as Bearer token in API requests
 
 ### Metric Collection
 

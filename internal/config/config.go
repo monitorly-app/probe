@@ -31,8 +31,9 @@ type Config struct {
 		SendInterval time.Duration `yaml:"send_interval"`
 	} `yaml:"sender"`
 	API struct {
-		URL string `yaml:"url"`
-		Key string `yaml:"key"`
+		URL              string `yaml:"url"`
+		ProjectID        string `yaml:"project_id"`        // Project ID (UUID) for API requests
+		ApplicationToken string `yaml:"application_token"` // Application token for API authentication
 	} `yaml:"api"`
 	LogFile struct {
 		Path string `yaml:"path"`
@@ -146,8 +147,11 @@ func validate(cfg *Config) error {
 		if cfg.API.URL == "" {
 			return fmt.Errorf("API URL is required when sender target is set to 'api'")
 		}
-		if cfg.API.Key == "" {
-			return fmt.Errorf("API key is required when sender target is set to 'api'")
+		if cfg.API.ProjectID == "" {
+			return fmt.Errorf("project ID is required when sender target is set to 'api'")
+		}
+		if cfg.API.ApplicationToken == "" {
+			return fmt.Errorf("application token is required when sender target is set to 'api'")
 		}
 	case "log_file":
 		// No validation needed for log_file target

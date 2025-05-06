@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/monitorly-app/probe/internal/collector"
@@ -13,10 +14,11 @@ import (
 
 // APISender implements the Sender interface for API-based metric sending
 type APISender struct {
-	apiURL      string
-	apiKey      string
-	machineName string
-	client      *http.Client
+	apiURL           string
+	projectID        string
+	applicationToken string
+	machineName      string
+	client           *http.Client
 }
 
 // APIPayload represents the structure of the data sent to the API
@@ -26,11 +28,12 @@ type APIPayload struct {
 }
 
 // NewAPISender creates a new instance of APISender
-func NewAPISender(apiURL, apiKey, machineName string) *APISender {
+func NewAPISender(apiURL, projectID, applicationToken, machineName string) *APISender {
 	return &APISender{
-		apiURL:      apiURL,
-		apiKey:      apiKey,
-		machineName: machineName,
+		apiURL:           apiURL,
+		projectID:        projectID,
+		applicationToken: applicationToken,
+		machineName:      machineName,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -55,13 +58,22 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 		return fmt.Errorf("error marshalling metrics: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", s.apiURL, bytes.NewBuffer(jsonData))
+	// Ensure the URL ends with a trailing slash for consistent path joining
+	baseURL := s.apiURL
+	if !strings.HasSuffix(baseURL, "/") {
+		baseURL += "/"
+	}
+
+	// Include project ID in the URL
+	url := fmt.Sprintf("%s%s", baseURL, s.projectID)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	req.Header.Set("Authorization", "Bearer "+s.applicationToken)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
