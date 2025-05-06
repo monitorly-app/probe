@@ -1,3 +1,6 @@
+# Optional custom machine name (defaults to system hostname if not specified)
+# machine_name: "web-server-01"
+
 collection:
   # CPU metrics collection settings
   cpu:

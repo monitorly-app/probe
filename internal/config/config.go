@@ -10,7 +10,8 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	Collection struct {
+	MachineName string `yaml:"machine_name"` // Machine name used to differentiate metrics from different servers
+	Collection  struct {
 		CPU struct {
 			Enabled  bool          `yaml:"enabled"`
 			Interval time.Duration `yaml:"interval"`
@@ -47,6 +48,21 @@ type MountPoint struct {
 	Label          string `yaml:"label"`
 	CollectUsage   bool   `yaml:"collect_usage"`
 	CollectPercent bool   `yaml:"collect_percent"`
+}
+
+// GetMachineName returns the configured machine name or the system hostname if not specified
+func (c *Config) GetMachineName() (string, error) {
+	if c.MachineName != "" {
+		return c.MachineName, nil
+	}
+
+	// Fallback to system hostname if not specified
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "unknown", fmt.Errorf("failed to get system hostname: %w", err)
+	}
+
+	return hostname, nil
 }
 
 // Load reads the configuration file from the given path and returns a Config

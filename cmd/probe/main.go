@@ -47,6 +47,14 @@ func main() {
 		}
 	}()
 
+	// Get the machine name for metrics
+	machineName, err := cfg.GetMachineName()
+	if err != nil {
+		logger.Printf("Warning: Failed to get machine name: %v. Using 'unknown'", err)
+		machineName = "unknown"
+	}
+	logger.Printf("Using machine name: %s", machineName)
+
 	// Channel for collected metrics
 	metricsChan := make(chan []collector.Metrics, 100)
 
@@ -55,7 +63,7 @@ func main() {
 
 	switch cfg.Sender.Target {
 	case "api":
-		metricSender = sender.NewAPISender(cfg.API.URL, cfg.API.Key)
+		metricSender = sender.NewAPISender(cfg.API.URL, cfg.API.Key, machineName)
 		logger.Printf("Metrics will be sent to API: %s", cfg.API.URL)
 	case "log_file":
 		metricSender = sender.NewFileLogger(cfg.LogFile.Path)
