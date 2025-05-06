@@ -1,4 +1,10 @@
-# Monitorly Probe v0.1.0
+<p align="center"><a href="https://monitorly.io" target="_blank"><img src="https://raw.githubusercontent.com/monitorly-app/probe/master/logo.svg" width="400" alt="Monitorly Logo"></a></p>
+
+<p align="center">
+<a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/version-v0.1.0-blue" alt="Version"></a>
+</p>
+
+# Monitorly Probe
 
 A lightweight server monitoring probe that collects system metrics and sends them to a central API or logs them to a file.
 

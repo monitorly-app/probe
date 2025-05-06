@@ -35,7 +35,7 @@ fi
 # Update version in README if it exists
 if [[ -f "README.md" ]]; then
   echo "Updating version in README.md..."
-  sed -i.bak "s/Monitorly Probe v[0-9]\+\.[0-9]\+\.[0-9]\+/Monitorly Probe v$VERSION/g" README.md
+  sed -i.bak "s/badge\/version-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-blue/badge\/version-v$VERSION-blue/g" README.md
   rm README.md.bak
   git add README.md
   git commit -m "Bump version to $VERSION in README"
