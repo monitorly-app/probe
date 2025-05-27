@@ -16,12 +16,10 @@ import (
 	goversion "github.com/hashicorp/go-version"
 )
 
-const (
+var (
 	// DefaultTimeout is the default timeout for HTTP requests
 	DefaultTimeout = 10 * time.Second
-)
 
-var (
 	// GitHubAPIReleaseURL is the GitHub API URL for releases
 	GitHubAPIReleaseURL = "https://api.github.com/repos/monitorly-app/probe/releases/latest"
 )

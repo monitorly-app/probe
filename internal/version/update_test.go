@@ -132,6 +132,11 @@ func TestCheckForUpdates(t *testing.T) {
 }
 
 func TestGetLatestVersionFromGitHub(t *testing.T) {
+	// Override DefaultTimeout for this test
+	origTimeout := DefaultTimeout
+	DefaultTimeout = 50 * time.Millisecond
+	defer func() { DefaultTimeout = origTimeout }()
+
 	tests := []struct {
 		name         string
 		mockResponse GitHubRelease
@@ -173,7 +178,7 @@ func TestGetLatestVersionFromGitHub(t *testing.T) {
 			if tt.mockStatus == -1 {
 				// Create a server that times out
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					time.Sleep(DefaultTimeout + time.Second)
+					time.Sleep(100 * time.Millisecond) // Double the timeout to ensure it triggers
 				}))
 			} else {
 				server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -286,7 +291,7 @@ func TestDownloadBinary(t *testing.T) {
 				}))
 				return server, "test binary content"
 			},
-			timeout:    time.Second,
+			timeout:    50 * time.Millisecond, // Reduced from 1 second
 			verifyFile: true,
 		},
 		{
@@ -297,19 +302,18 @@ func TestDownloadBinary(t *testing.T) {
 				}))
 				return server, ""
 			},
-			timeout: time.Second,
+			timeout: 50 * time.Millisecond, // Reduced from 1 second
 			wantErr: true,
 		},
 		{
 			name: "timeout",
 			setupMock: func() (*httptest.Server, string) {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					// Sleep for a short duration to trigger context timeout
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(30 * time.Millisecond) // Sleep for longer than timeout
 				}))
 				return server, ""
 			},
-			timeout: 50 * time.Millisecond,
+			timeout: 20 * time.Millisecond, // Will trigger timeout
 			wantErr: true,
 		},
 		{
@@ -319,7 +323,7 @@ func TestDownloadBinary(t *testing.T) {
 				server.Close() // Close the server to make the URL invalid
 				return server, ""
 			},
-			timeout: time.Second,
+			timeout: 50 * time.Millisecond, // Reduced from 1 second
 			wantErr: true,
 		},
 		{
@@ -330,7 +334,7 @@ func TestDownloadBinary(t *testing.T) {
 				}))
 				return server, ""
 			},
-			timeout: time.Second,
+			timeout: 50 * time.Millisecond, // Reduced from 1 second
 			wantErr: true,
 		},
 	}
@@ -375,7 +379,7 @@ func TestStartUpdateChecker(t *testing.T) {
 		{
 			name:       "update available",
 			nextCheck:  time.Now().Add(-time.Hour), // Check immediately
-			retryDelay: time.Minute,
+			retryDelay: time.Millisecond,           // Reduced from 1 minute
 			setupMock: func() *httptest.Server {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					json.NewEncoder(w).Encode(GitHubRelease{
@@ -387,7 +391,7 @@ func TestStartUpdateChecker(t *testing.T) {
 		{
 			name:       "no update available",
 			nextCheck:  time.Now().Add(-time.Hour), // Check immediately
-			retryDelay: time.Minute,
+			retryDelay: time.Millisecond,           // Reduced from 1 minute
 			setupMock: func() *httptest.Server {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					json.NewEncoder(w).Encode(GitHubRelease{
@@ -415,8 +419,8 @@ func TestStartUpdateChecker(t *testing.T) {
 			GitHubAPIReleaseURL = server.URL
 			Version = "v1.0.0"
 
-			// Create a context that cancels after a short time
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			// Create a context that cancels after a very short time
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond) // Reduced from 100ms
 			defer cancel()
 
 			// Start the update checker
