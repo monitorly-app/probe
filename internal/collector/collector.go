@@ -21,6 +21,8 @@ const (
 	NameRAM MetricName = "ram"
 	// NameDisk is the name for disk metrics
 	NameDisk MetricName = "disk"
+	// NameService is the name for service metrics
+	NameService MetricName = "service"
 )
 
 // MetricMetadata contains additional information about a metric

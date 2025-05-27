@@ -359,6 +359,16 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 		logger.Printf("Disk collector started with interval: %v", cfg.Collection.Disk.Interval)
 	}
 
+	if cfg.Collection.Service.Enabled {
+		wg.Add(1)
+		serviceCollector := system.NewServiceCollector(cfg.Collection.Service.Services)
+		go func() {
+			defer wg.Done()
+			collectRoutine(ctx, "Service", serviceCollector, metricsChan, cfg.Collection.Service.Interval)
+		}()
+		logger.Printf("Service collector started with interval: %v", cfg.Collection.Service.Interval)
+	}
+
 	// Start sender routine
 	wg.Add(1)
 	go func() {

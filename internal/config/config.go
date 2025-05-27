@@ -25,6 +25,11 @@ type Config struct {
 			Interval    time.Duration `yaml:"interval"`
 			MountPoints []MountPoint  `yaml:"mount_points"`
 		} `yaml:"disk"`
+		Service struct {
+			Enabled  bool          `yaml:"enabled"`
+			Interval time.Duration `yaml:"interval"`
+			Services []Service     `yaml:"services"`
+		} `yaml:"service"`
 	} `yaml:"collection"`
 	Sender struct {
 		Target       string        `yaml:"target"`
@@ -55,6 +60,34 @@ type MountPoint struct {
 	Label          string `yaml:"label"`
 	CollectUsage   bool   `yaml:"collect_usage"`
 	CollectPercent bool   `yaml:"collect_percent"`
+}
+
+// Service represents a system service to monitor
+type Service struct {
+	Name  string `yaml:"name"`  // Service name (e.g., "nginx", "postgresql")
+	Label string `yaml:"label"` // User-friendly label for the service
+}
+
+// Collection holds the configuration for metric collection
+type Collection struct {
+	CPU struct {
+		Enabled  bool          `yaml:"enabled"`
+		Interval time.Duration `yaml:"interval"`
+	} `yaml:"cpu"`
+	RAM struct {
+		Enabled  bool          `yaml:"enabled"`
+		Interval time.Duration `yaml:"interval"`
+	} `yaml:"ram"`
+	Disk struct {
+		Enabled     bool          `yaml:"enabled"`
+		Interval    time.Duration `yaml:"interval"`
+		MountPoints []MountPoint  `yaml:"mount_points"`
+	} `yaml:"disk"`
+	Service struct {
+		Enabled  bool          `yaml:"enabled"`
+		Interval time.Duration `yaml:"interval"`
+		Services []Service     `yaml:"services"`
+	} `yaml:"service"`
 }
 
 // GetMachineName returns the configured machine name or the system hostname if not specified

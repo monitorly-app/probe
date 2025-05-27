@@ -23,3 +23,10 @@ func NewDiskCollectorFunc(mountPoints []config.MountPoint) func() collector.Coll
 		return NewDiskCollector(mountPoints)
 	}
 }
+
+// NewServiceCollectorFunc returns a function that creates a new service collector with the specified services
+func NewServiceCollectorFunc(services []config.Service) func() collector.Collector {
+	return func() collector.Collector {
+		return NewServiceCollector(services)
+	}
+}
