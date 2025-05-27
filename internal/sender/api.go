@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/monitorly-app/probe/internal/collector"
+	"github.com/monitorly-app/probe/internal/encryption"
+	"github.com/monitorly-app/probe/internal/logger"
 )
 
 // APISender implements the Sender interface for API-based metric sending
@@ -18,22 +22,28 @@ type APISender struct {
 	projectID        string
 	applicationToken string
 	machineName      string
+	encryptionKey    string
 	client           *http.Client
+	mu               sync.RWMutex
+	encryptionFailed atomic.Bool
+	warningLogged    atomic.Bool
 }
 
 // APIPayload represents the structure of the data sent to the API
 type APIPayload struct {
 	MachineName string              `json:"machine_name"`
 	Metrics     []collector.Metrics `json:"metrics"`
+	Encrypted   bool                `json:"encrypted"`
 }
 
 // NewAPISender creates a new instance of APISender
-func NewAPISender(apiURL, projectID, applicationToken, machineName string) *APISender {
+func NewAPISender(apiURL, projectID, applicationToken, machineName, encryptionKey string) *APISender {
 	return &APISender{
 		apiURL:           apiURL,
 		projectID:        projectID,
 		applicationToken: applicationToken,
 		machineName:      machineName,
+		encryptionKey:    encryptionKey,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -51,11 +61,44 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 	payload := APIPayload{
 		MachineName: s.machineName,
 		Metrics:     metrics,
+		Encrypted:   false,
 	}
 
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("error marshalling metrics: %w", err)
+	// Check if we should attempt encryption
+	shouldEncrypt := s.encryptionKey != "" && !s.encryptionFailed.Load()
+
+	var jsonData []byte
+	var err error
+
+	if shouldEncrypt {
+		// Marshal the payload first
+		jsonData, err = json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("error marshalling metrics: %w", err)
+		}
+
+		// Encrypt the JSON data
+		encryptedData, err := encryption.Encrypt(jsonData, s.encryptionKey)
+		if err != nil {
+			return fmt.Errorf("error encrypting metrics: %w", err)
+		}
+
+		// Create a new payload with the encrypted data
+		payload.Encrypted = true
+		jsonData, err = json.Marshal(map[string]interface{}{
+			"machine_name": s.machineName,
+			"encrypted":    true,
+			"data":         encryptedData,
+		})
+		if err != nil {
+			return fmt.Errorf("error marshalling encrypted payload: %w", err)
+		}
+	} else {
+		// Send unencrypted data
+		jsonData, err = json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("error marshalling metrics: %w", err)
+		}
 	}
 
 	// Ensure the URL ends with a trailing slash for consistent path joining
@@ -80,6 +123,16 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 		return fmt.Errorf("error sending request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		// Only log the warning once
+		if !s.warningLogged.Swap(true) {
+			logger.Printf("Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.")
+		}
+		s.encryptionFailed.Store(true)
+		// Retry without encryption
+		return s.SendWithContext(ctx, metrics)
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("API returned non-success status: %s", resp.Status)

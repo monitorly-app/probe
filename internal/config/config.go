@@ -34,6 +34,7 @@ type Config struct {
 		URL              string `yaml:"url"`
 		ProjectID        string `yaml:"project_id"`        // Project ID (UUID) for API requests
 		ApplicationToken string `yaml:"application_token"` // Application token for API authentication
+		EncryptionKey    string `yaml:"encryption_key"`    // Optional: If set, encrypts the request body. Requires premium subscription.
 	} `yaml:"api"`
 	LogFile struct {
 		Path string `yaml:"path"`
@@ -157,6 +158,11 @@ func validate(cfg *Config) error {
 		}
 		if cfg.API.ApplicationToken == "" {
 			return fmt.Errorf("application token is required when sender target is set to 'api'")
+		}
+		if cfg.API.EncryptionKey != "" {
+			if len(cfg.API.EncryptionKey) != 32 {
+				return fmt.Errorf("encryption key must be exactly 32 bytes long")
+			}
 		}
 	case "log_file":
 		// No validation needed for log_file target

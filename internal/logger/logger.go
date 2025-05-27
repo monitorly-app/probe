@@ -43,6 +43,18 @@ func Initialize(logFilePath string) error {
 	return err
 }
 
+// GetDefaultLogger returns the current default logger instance
+// This is primarily used for testing purposes
+func GetDefaultLogger() LoggerInterface {
+	return defaultLogger
+}
+
+// SetDefaultLogger sets the default logger instance
+// This is primarily used for testing purposes
+func SetDefaultLogger(logger LoggerInterface) {
+	defaultLogger = logger
+}
+
 // NewLogger creates a new instance of Logger with the specified log file path
 func NewLogger(logFilePath string) (*Logger, error) {
 	// Create directory for log file if it doesn't exist

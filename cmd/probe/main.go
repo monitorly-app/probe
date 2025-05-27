@@ -312,8 +312,12 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 			cfg.API.ProjectID,
 			cfg.API.ApplicationToken,
 			machineName,
+			cfg.API.EncryptionKey,
 		)
 		logger.Printf("Metrics will be sent to API: %s for project: %s", cfg.API.URL, cfg.API.ProjectID)
+		if cfg.API.EncryptionKey != "" {
+			logger.Printf("Encryption enabled for API communication")
+		}
 	case "log_file":
 		metricSender = sender.NewFileLogger(cfg.LogFile.Path)
 		logger.Printf("Metrics will be logged to file: %s", cfg.LogFile.Path)
