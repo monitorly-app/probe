@@ -21,6 +21,241 @@ import (
 	"github.com/monitorly-app/probe/internal/version"
 )
 
+// CommandLineFlags holds all command-line flag values
+type CommandLineFlags struct {
+	ConfigPath      string
+	ShowVersion     bool
+	CheckUpdate     bool
+	SkipUpdateCheck bool
+	ForceUpdate     bool
+}
+
+// parseCommandLineFlags parses command-line arguments and returns flag values
+func parseCommandLineFlags() *CommandLineFlags {
+	flags := &CommandLineFlags{}
+	flag.StringVar(&flags.ConfigPath, "config", "config.yaml", "Path to the configuration file")
+	flag.BoolVar(&flags.ShowVersion, "version", false, "Show version information and exit")
+	flag.BoolVar(&flags.CheckUpdate, "check-update", false, "Check for updates and exit")
+	flag.BoolVar(&flags.SkipUpdateCheck, "skip-update-check", false, "Skip update check at startup")
+	flag.BoolVar(&flags.ForceUpdate, "update", false, "Check for updates and update if available")
+	flag.Parse()
+	return flags
+}
+
+// handleVersionFlag handles the --version flag
+func handleVersionFlag() {
+	fmt.Println(version.Info())
+}
+
+// handleCheckUpdateFlag handles the --check-update flag
+func handleCheckUpdateFlag() error {
+	updateAvailable, latestVersion, err := version.CheckForUpdates()
+	if err != nil {
+		return fmt.Errorf("error checking for updates: %w", err)
+	}
+
+	if updateAvailable {
+		fmt.Printf("Update available: %s (current: %s)\n", latestVersion, version.GetVersion())
+		fmt.Println("Run with --update to automatically update")
+	} else {
+		fmt.Println("No updates available, you are running the latest version")
+	}
+	return nil
+}
+
+// handleForceUpdateFlag handles the --update flag
+func handleForceUpdateFlag() error {
+	fmt.Println("Checking for updates...")
+	updateAvailable, latestVersion, err := version.CheckForUpdates()
+	if err != nil {
+		return fmt.Errorf("error checking for updates: %w", err)
+	}
+
+	if updateAvailable {
+		fmt.Printf("Update available: %s (current: %s). Updating...\n", latestVersion, version.GetVersion())
+		if err := version.SelfUpdate(); err != nil {
+			return fmt.Errorf("error updating: %w", err)
+		}
+		fmt.Println("Update successful. Please restart the application.")
+		os.Exit(0)
+	} else {
+		fmt.Println("No updates available, you are running the latest version")
+	}
+	return nil
+}
+
+// performStartupUpdateCheck performs the automatic update check at startup
+func performStartupUpdateCheck() {
+	log.Println("Checking for updates...")
+	updateAvailable, latestVersion, err := version.CheckForUpdates()
+	if err != nil {
+		log.Printf("Error checking for updates: %v", err)
+	} else if updateAvailable {
+		log.Printf("Update available: %s (current: %s). Updating...", latestVersion, version.GetVersion())
+		if err := version.SelfUpdate(); err != nil {
+			log.Printf("Error updating: %v", err)
+		} else {
+			log.Println("Update successful. Restarting...")
+			// Restart the application - just exit with success code
+			// and let the service manager restart the application
+			os.Exit(0)
+		}
+	} else {
+		log.Println("No updates available")
+	}
+}
+
+// setupSignalHandling sets up graceful shutdown signal handling
+func setupSignalHandling(ctx context.Context, cancel context.CancelFunc) {
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-signalChan
+		log.Printf("Received signal: %v. Shutting down...", sig)
+		cancel()
+	}()
+}
+
+// setupConfigWatcher creates and configures a file system watcher for the config file
+func setupConfigWatcher(configPath string) (*fsnotify.Watcher, error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create file watcher: %w", err)
+	}
+
+	configDir := filepath.Dir(configPath)
+	if err := watcher.Add(configDir); err != nil {
+		watcher.Close()
+		return nil, fmt.Errorf("failed to watch config directory: %w", err)
+	}
+
+	return watcher, nil
+}
+
+// startUpdateChecker starts the automatic update checker if enabled in config
+func startUpdateChecker(ctx context.Context, cfg *config.Config) {
+	if !cfg.Updates.Enabled {
+		return
+	}
+
+	nextCheck, err := cfg.GetUpdateCheckTime()
+	if err != nil {
+		log.Printf("Error parsing update check time: %v, using default (midnight)", err)
+		nextCheck = time.Now().Add(24 * time.Hour).Truncate(24 * time.Hour) // Next midnight
+	}
+	retryDelay := cfg.GetUpdateRetryDelay()
+	log.Printf("Automatic updates enabled, next check at %s", nextCheck.Format("2006-01-02 15:04:05"))
+	version.StartUpdateChecker(ctx, nextCheck, retryDelay)
+}
+
+// runMainLoop runs the main application loop with config reloading
+func runMainLoop(ctx context.Context, configPath string, initialConfig *config.Config, restartChan <-chan struct{}) {
+	cfg := initialConfig
+
+	for {
+		// Start the application with the current config
+		appCtx, appCancel := context.WithCancel(ctx)
+		appWg := runApp(appCtx, cfg)
+
+		// Wait for either a config change or application shutdown
+		select {
+		case <-ctx.Done():
+			// Global shutdown requested
+			appCancel()
+			appWg.Wait()
+			return
+		case <-restartChan:
+			// Config changed, reload and restart
+			log.Println("Configuration changed, restarting...")
+			appCancel()
+			appWg.Wait()
+
+			// Load the new configuration
+			newCfg, err := loadConfig(configPath)
+			if err != nil {
+				log.Printf("Error loading new configuration: %v, continuing with old config", err)
+				continue
+			}
+			cfg = newCfg
+		}
+	}
+}
+
+// runApplication is the main application logic, extracted from main() for testability
+func runApplication(flags *CommandLineFlags) error {
+	// Handle version flag
+	if flags.ShowVersion {
+		handleVersionFlag()
+		return nil
+	}
+
+	// Handle check-update flag
+	if flags.CheckUpdate {
+		return handleCheckUpdateFlag()
+	}
+
+	// Handle force update flag
+	if flags.ForceUpdate {
+		return handleForceUpdateFlag()
+	}
+
+	log.Printf("Starting %s", version.Info())
+
+	// Check for updates at startup, unless skipped
+	if !flags.SkipUpdateCheck {
+		performStartupUpdateCheck()
+	}
+
+	// Find the config file
+	absConfigPath, err := findConfigFile(flags.ConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to find config file: %w", err)
+	}
+
+	// Set up context with cancellation for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handling for graceful shutdown
+	setupSignalHandling(ctx, cancel)
+
+	// Create configuration watcher
+	watcher, err := setupConfigWatcher(absConfigPath)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
+
+	// Initialize configuration
+	cfg, err := loadConfig(absConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	// Set up a channel to restart the application on config changes
+	restartChan := make(chan struct{})
+
+	// Start config watcher goroutine
+	go watchConfigFile(ctx, watcher, absConfigPath, restartChan)
+
+	// Start update checker if enabled
+	startUpdateChecker(ctx, cfg)
+
+	// Run the main application loop
+	runMainLoop(ctx, absConfigPath, cfg, restartChan)
+
+	return nil
+}
+
+func main() {
+	flags := parseCommandLineFlags()
+
+	if err := runApplication(flags); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 // searchPaths returns a list of locations to search for the config file
 func searchPaths(configFlag string) []string {
 	// If config flag is set, that's the primary location
@@ -66,170 +301,6 @@ func findConfigFile(configFlag string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no config file found in search paths")
-}
-
-func main() {
-	// Parse command-line flags
-	configPath := flag.String("config", "config.yaml", "Path to the configuration file")
-	showVersion := flag.Bool("version", false, "Show version information and exit")
-	checkUpdate := flag.Bool("check-update", false, "Check for updates and exit")
-	skipUpdateCheck := flag.Bool("skip-update-check", false, "Skip update check at startup")
-	forceUpdate := flag.Bool("update", false, "Check for updates and update if available")
-	flag.Parse()
-
-	// If version flag is provided, print version and exit
-	if *showVersion {
-		fmt.Println(version.Info())
-		return
-	}
-
-	// If check-update flag is provided, check for updates and exit
-	if *checkUpdate {
-		updateAvailable, latestVersion, err := version.CheckForUpdates()
-		if err != nil {
-			fmt.Printf("Error checking for updates: %v\n", err)
-			os.Exit(1)
-		}
-
-		if updateAvailable {
-			fmt.Printf("Update available: %s (current: %s)\n", latestVersion, version.GetVersion())
-			fmt.Println("Run with --update to automatically update")
-		} else {
-			fmt.Println("No updates available, you are running the latest version")
-		}
-		return
-	}
-
-	// If update flag is provided, update and exit
-	if *forceUpdate {
-		fmt.Println("Checking for updates...")
-		updateAvailable, latestVersion, err := version.CheckForUpdates()
-		if err != nil {
-			fmt.Printf("Error checking for updates: %v\n", err)
-			os.Exit(1)
-		}
-
-		if updateAvailable {
-			fmt.Printf("Update available: %s (current: %s). Updating...\n", latestVersion, version.GetVersion())
-			if err := version.SelfUpdate(); err != nil {
-				fmt.Printf("Error updating: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Println("Update successful. Please restart the application.")
-			os.Exit(0)
-		} else {
-			fmt.Println("No updates available, you are running the latest version")
-			return
-		}
-	}
-
-	log.Printf("Starting %s", version.Info())
-
-	// Check for updates at startup, unless skipped
-	if !*skipUpdateCheck {
-		log.Println("Checking for updates...")
-		updateAvailable, latestVersion, err := version.CheckForUpdates()
-		if err != nil {
-			log.Printf("Error checking for updates: %v", err)
-		} else if updateAvailable {
-			log.Printf("Update available: %s (current: %s). Updating...", latestVersion, version.GetVersion())
-			if err := version.SelfUpdate(); err != nil {
-				log.Printf("Error updating: %v", err)
-			} else {
-				log.Println("Update successful. Restarting...")
-				// Restart the application - just exit with success code
-				// and let the service manager restart the application
-				os.Exit(0)
-			}
-		} else {
-			log.Println("No updates available")
-		}
-	}
-
-	// Find the config file
-	absConfigPath, err := findConfigFile(*configPath)
-	if err != nil {
-		log.Fatalf("Failed to find config file: %v", err)
-	}
-
-	// Set up context with cancellation for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Set up signal handling for graceful shutdown
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-signalChan
-		log.Printf("Received signal: %v. Shutting down...", sig)
-		cancel()
-	}()
-
-	// Create configuration watcher
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Fatalf("Failed to create file watcher: %v", err)
-	}
-	defer watcher.Close()
-
-	// Add the config file directory to the watcher
-	configDir := filepath.Dir(absConfigPath)
-	if err := watcher.Add(configDir); err != nil {
-		log.Fatalf("Failed to watch config directory: %v", err)
-	}
-
-	// Initialize configuration
-	cfg, err := loadConfig(absConfigPath)
-	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
-	}
-
-	// Set up a channel to restart the application on config changes
-	restartChan := make(chan struct{})
-
-	// Start config watcher goroutine
-	go watchConfigFile(ctx, watcher, absConfigPath, restartChan)
-
-	// Start update checker if enabled
-	if cfg.Updates.Enabled {
-		nextCheck, err := cfg.GetUpdateCheckTime()
-		if err != nil {
-			log.Printf("Error parsing update check time: %v, using default (midnight)", err)
-			nextCheck = time.Now().Add(24 * time.Hour).Truncate(24 * time.Hour) // Next midnight
-		}
-		retryDelay := cfg.GetUpdateRetryDelay()
-		log.Printf("Automatic updates enabled, next check at %s", nextCheck.Format("2006-01-02 15:04:05"))
-		version.StartUpdateChecker(ctx, nextCheck, retryDelay)
-	}
-
-	// Main application loop
-	for {
-		// Start the application with the current config
-		appCtx, appCancel := context.WithCancel(ctx)
-		appWg := runApp(appCtx, cfg)
-
-		// Wait for either a config change or application shutdown
-		select {
-		case <-ctx.Done():
-			// Global shutdown requested
-			appCancel()
-			appWg.Wait()
-			return
-		case <-restartChan:
-			// Config changed, reload and restart
-			log.Println("Configuration changed, restarting...")
-			appCancel()
-			appWg.Wait()
-
-			// Load the new configuration
-			newCfg, err := loadConfig(absConfigPath)
-			if err != nil {
-				log.Printf("Error loading new configuration: %v, continuing with old config", err)
-				continue
-			}
-			cfg = newCfg
-		}
-	}
 }
 
 // loadConfig loads the configuration from the specified path

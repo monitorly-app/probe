@@ -70,6 +70,10 @@ func (m *mockCompressWriter) Close() error {
 	return m.closeErr
 }
 
+func (m *mockCompressWriter) Bytes() []byte {
+	return m.buf.Bytes()
+}
+
 // Test the Send method directly
 func TestAPISender_Send(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -852,4 +856,173 @@ func Test_defaultGzipWriterFactory(t *testing.T) {
 	if !bytes.Equal(decompressed, testData) {
 		t.Errorf("Decompressed data = %v, want %v", decompressed, testData)
 	}
+}
+
+// Test compressDataWithWriter function
+func Test_compressDataWithWriter(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		writer  compressWriter
+		wantErr bool
+	}{
+		{
+			name: "successful compression",
+			data: []byte("test data"),
+			writer: &mockCompressWriter{
+				buf: &bytes.Buffer{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "write error",
+			data: []byte("test data"),
+			writer: &mockCompressWriter{
+				writeErr: errors.New("mock write error"),
+				buf:      &bytes.Buffer{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "close error",
+			data: []byte("test data"),
+			writer: &mockCompressWriter{
+				closeErr: errors.New("mock close error"),
+				buf:      &bytes.Buffer{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "write and close error",
+			data: []byte("test data"),
+			writer: &mockCompressWriter{
+				writeErr: errors.New("mock write error"),
+				closeErr: errors.New("mock close error"),
+				buf:      &bytes.Buffer{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty data",
+			data: []byte{},
+			writer: &mockCompressWriter{
+				buf: &bytes.Buffer{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "nil data",
+			data: nil,
+			writer: &mockCompressWriter{
+				buf: &bytes.Buffer{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "large data",
+			data: bytes.Repeat([]byte("a"), 1000),
+			writer: &mockCompressWriter{
+				buf: &bytes.Buffer{},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := compressDataWithWriter(tt.data, tt.writer)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("compressDataWithWriter() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				// Verify the result is not nil and has some data
+				if result == nil {
+					t.Error("compressDataWithWriter() returned nil result")
+					return
+				}
+
+				// For non-empty input, verify some data was written
+				if len(tt.data) > 0 && len(result) == 0 {
+					t.Error("compressDataWithWriter() returned empty result for non-empty input")
+				}
+
+				// For empty input, verify minimal output
+				if len(tt.data) == 0 && len(result) > 10 {
+					t.Errorf("compressDataWithWriter() returned too much data for empty input: %d bytes", len(result))
+				}
+			}
+		})
+	}
+}
+
+// Test gzipWriter Bytes method specifically
+func Test_gzipWriter_Bytes(t *testing.T) {
+	tests := []struct {
+		name     string
+		setupBuf func() io.Writer
+		wantNil  bool
+	}{
+		{
+			name: "with bytes.Buffer",
+			setupBuf: func() io.Writer {
+				return &bytes.Buffer{}
+			},
+			wantNil: false,
+		},
+		{
+			name: "with non-bytes.Buffer writer",
+			setupBuf: func() io.Writer {
+				// Use a writer that's not a *bytes.Buffer
+				return &mockWriter{}
+			},
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := tt.setupBuf()
+			writer := &gzipWriter{
+				buf: buf,
+				gw:  gzip.NewWriter(buf),
+			}
+
+			// Write some test data
+			testData := []byte("test data for bytes method")
+			if _, err := writer.Write(testData); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+
+			if err := writer.Close(); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+
+			// Test the Bytes method
+			result := writer.Bytes()
+
+			if tt.wantNil {
+				if result != nil {
+					t.Errorf("Bytes() = %v, want nil for non-bytes.Buffer writer", result)
+				}
+			} else {
+				if result == nil {
+					t.Error("Bytes() = nil, want non-nil for bytes.Buffer writer")
+				} else if len(result) == 0 {
+					t.Error("Bytes() returned empty slice, expected compressed data")
+				}
+			}
+		})
+	}
+}
+
+// mockWriter implements io.Writer but is not a *bytes.Buffer
+type mockWriter struct {
+	data []byte
+}
+
+func (m *mockWriter) Write(p []byte) (n int, err error) {
+	m.data = append(m.data, p...)
+	return len(p), nil
 }

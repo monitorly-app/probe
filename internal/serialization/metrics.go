@@ -89,7 +89,7 @@ func WriteMetricsTo(w io.Writer, metrics []collector.Metrics, indent bool) error
 			return fmt.Errorf("failed to write to output: %w", err)
 		}
 
-		// Add newline at the end
+		// Add newline after the JSON array
 		if _, err := io.WriteString(w, "\n"); err != nil {
 			return fmt.Errorf("failed to write newline: %w", err)
 		}

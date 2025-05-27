@@ -1,11 +1,40 @@
 package system
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/monitorly-app/probe/internal/collector"
 	"github.com/monitorly-app/probe/internal/config"
 )
+
+// mockCmd implements a mock exec.Cmd
+type mockCmd struct {
+	err error
+}
+
+func (m *mockCmd) Run() error {
+	return m.err
+}
+
+// mockExecCommand replaces exec.Command for testing
+type mockExecCommand struct {
+	command string
+	args    []string
+	err     error
+}
+
+func (m *mockExecCommand) Command(command string, args ...string) *exec.Cmd {
+	m.command = command
+	m.args = args
+	// Create a real command that will succeed or fail based on our mock error
+	if m.err != nil {
+		// Use a command that will fail
+		return exec.Command("false")
+	}
+	// Use a command that will succeed
+	return exec.Command("true")
+}
 
 func TestNewServiceCollector(t *testing.T) {
 	services := []config.Service{
@@ -108,5 +137,103 @@ func BenchmarkServiceCollector_Collect(b *testing.B) {
 		if err != nil {
 			b.Fatalf("ServiceCollector.Collect() failed: %v", err)
 		}
+	}
+}
+
+func TestCheckServiceStatusSystemd(t *testing.T) {
+	// Save original execCommand
+	originalExecCommand := execCommand
+	defer func() {
+		execCommand = originalExecCommand
+	}()
+
+	tests := []struct {
+		name    string
+		service string
+		err     error
+		want    bool
+	}{
+		{
+			name:    "service is running",
+			service: "test-service",
+			err:     nil,
+			want:    true,
+		},
+		{
+			name:    "service is not running",
+			service: "test-service",
+			err:     exec.ErrNotFound,
+			want:    false,
+		},
+		{
+			name:    "service check error",
+			service: "test-service",
+			err:     exec.ErrNotFound,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockExecCommand{
+				err: tt.err,
+			}
+			execCommand = mock.Command
+
+			got := checkServiceStatusSystemd(tt.service)
+			if got != tt.want {
+				t.Errorf("checkServiceStatusSystemd() = %v, want %v", got, tt.want)
+			}
+
+			// Verify the command was called correctly
+			if mock.command != "systemctl" {
+				t.Errorf("Expected command 'systemctl', got %s", mock.command)
+			}
+			if len(mock.args) != 3 || mock.args[0] != "is-active" || mock.args[1] != "--quiet" || mock.args[2] != tt.service {
+				t.Errorf("Expected args [is-active --quiet %s], got %v", tt.service, mock.args)
+			}
+		})
+	}
+}
+
+func TestNewServiceCollectorFunc(t *testing.T) {
+	tests := []struct {
+		name     string
+		services []config.Service
+		want     bool
+	}{
+		{
+			name: "with services",
+			services: []config.Service{
+				{Name: "service1"},
+				{Name: "service2"},
+			},
+			want: true,
+		},
+		{
+			name:     "no services",
+			services: nil,
+			want:     false,
+		},
+		{
+			name:     "empty services",
+			services: []config.Service{},
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := NewServiceCollectorFunc(tt.services)
+			got := collector != nil
+			if got != tt.want {
+				t.Errorf("NewServiceCollectorFunc() returned %v, want %v", got, tt.want)
+			}
+
+			// Additional check for nil services
+			if tt.services == nil && got {
+				t.Error("NewServiceCollectorFunc() returned non-nil for nil services")
+			}
+		})
 	}
 }

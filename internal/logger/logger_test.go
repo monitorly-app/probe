@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -485,4 +486,110 @@ func TestClose(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFileLoggerFatalf tests the Fatalf method of FileLogger
+func TestFileLoggerFatalf(t *testing.T) {
+	// Create a temporary directory for test files
+	tmpDir, err := os.MkdirTemp("", "logger-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a test log file
+	logFile := filepath.Join(tmpDir, "test.log")
+
+	// Test that Fatalf writes to the log file and exits
+	if os.Getenv("TEST_FATALF") == "1" {
+		// Get the log file path from environment variable
+		logFilePath := os.Getenv("TEST_LOG_FILE")
+		if logFilePath == "" {
+			fmt.Fprintf(os.Stderr, "TEST_LOG_FILE environment variable not set\n")
+			os.Exit(2)
+		}
+
+		// Ensure the directory exists
+		if err := os.MkdirAll(filepath.Dir(logFilePath), 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create log directory: %v\n", err)
+			os.Exit(2)
+		}
+
+		logger, err := NewLogger(logFilePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create logger: %v\n", err)
+			os.Exit(2)
+		}
+
+		logger.Fatalf("test fatal message: %s", "error")
+		return
+	}
+
+	// Run the test in a subprocess
+	cmd := exec.Command(os.Args[0], "-test.run=TestFileLoggerFatalf")
+	cmd.Env = append(os.Environ(), "TEST_FATALF=1", fmt.Sprintf("TEST_LOG_FILE=%s", logFile))
+	err = cmd.Run()
+
+	if e, ok := err.(*exec.ExitError); ok && !e.Success() {
+		// Process exited with non-zero status, which is what we want
+		// Now verify the message was written
+		content, err := os.ReadFile(logFile)
+		if err != nil {
+			t.Errorf("Failed to read log file: %v", err)
+			return
+		}
+
+		expectedMsg := "test fatal message: error"
+		if !strings.Contains(string(content), expectedMsg) {
+			t.Errorf("Fatalf output = %q, want to contain %q", string(content), expectedMsg)
+		}
+		return
+	}
+	t.Fatalf("process ran with err %v, want exit status 1", err)
+}
+
+// TestGlobalFatalf tests the global Fatalf function
+func TestGlobalFatalf(t *testing.T) {
+	// Create a mock logger
+	mock := &MockLogger{}
+	SetDefaultLogger(mock)
+	defer SetDefaultLogger(nil)
+
+	// Test with mock logger
+	Fatalf("test fatal message: %s", "error")
+
+	fatals := mock.GetFatals()
+	if len(fatals) != 1 {
+		t.Errorf("Fatalf() logged %d fatal messages, want 1", len(fatals))
+		return
+	}
+
+	expectedMsg := "test fatal message: error"
+	if fatals[0] != expectedMsg {
+		t.Errorf("Fatalf() logged %v, want %v", fatals[0], expectedMsg)
+	}
+}
+
+// TestGlobalFatalfFallback tests the global Fatalf function fallback when no default logger is set
+func TestGlobalFatalfFallback(t *testing.T) {
+	// Test that Fatalf fallback works when no default logger is set
+	if os.Getenv("TEST_FATALF_FALLBACK") == "1" {
+		// Ensure no default logger is set
+		SetDefaultLogger(nil)
+
+		// This should call log.Fatalf and exit
+		Fatalf("test fallback fatal message: %s", "error")
+		return
+	}
+
+	// Run the test in a subprocess
+	cmd := exec.Command(os.Args[0], "-test.run=TestGlobalFatalfFallback")
+	cmd.Env = append(os.Environ(), "TEST_FATALF_FALLBACK=1")
+	err := cmd.Run()
+
+	if e, ok := err.(*exec.ExitError); ok && !e.Success() {
+		// Process exited with non-zero status, which is what we want
+		return
+	}
+	t.Fatalf("process ran with err %v, want exit status 1", err)
 }

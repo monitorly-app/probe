@@ -8,6 +8,9 @@ import (
 	"github.com/monitorly-app/probe/internal/config"
 )
 
+// execCommand is a variable to allow mocking exec.Command in tests
+var execCommand = exec.Command
+
 // ServiceCollector implements the collector.Collector interface for service metrics
 type ServiceCollector struct {
 	Services []config.Service
@@ -20,9 +23,9 @@ func NewServiceCollector(services []config.Service) collector.Collector {
 	}
 }
 
-// checkServiceStatusSystemd checks service status using systemd
-func (c *ServiceCollector) checkServiceStatusSystemd(serviceName string) bool {
-	cmd := exec.Command("systemctl", "is-active", "--quiet", serviceName)
+// checkServiceStatusSystemd checks if a service is running using systemctl
+func checkServiceStatusSystemd(service string) bool {
+	cmd := execCommand("systemctl", "is-active", "--quiet", service)
 	return cmd.Run() == nil
 }
 
@@ -50,7 +53,7 @@ func (c *ServiceCollector) Collect() ([]collector.Metrics, error) {
 
 		// Check if systemctl exists
 		if _, err := exec.LookPath("systemctl"); err == nil {
-			isActive = c.checkServiceStatusSystemd(service.Name)
+			isActive = checkServiceStatusSystemd(service.Name)
 		} else {
 			// Fallback to SysV init
 			isActive = c.checkServiceStatusSysV(service.Name)

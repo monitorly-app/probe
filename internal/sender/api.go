@@ -39,37 +39,45 @@ type APIPayload struct {
 	Compressed  bool                `json:"compressed"`
 }
 
-// compressWriter is an interface that wraps the basic Write and Close methods
+// compressWriter is an interface that wraps the basic Write, Close, and Bytes methods
 type compressWriter interface {
-	Write(p []byte) (n int, err error)
-	Close() error
+	io.WriteCloser
+	Bytes() []byte
 }
 
 // writerFactory is a function type that creates a new compressWriter
 type writerFactory func(io.Writer) compressWriter
 
+// gzipWriter implements compressWriter using gzip compression
+type gzipWriter struct {
+	buf io.Writer
+	gw  *gzip.Writer
+}
+
+// Write writes data to the gzip writer
+func (w *gzipWriter) Write(p []byte) (n int, err error) {
+	return w.gw.Write(p)
+}
+
+// Close closes the gzip writer
+func (w *gzipWriter) Close() error {
+	return w.gw.Close()
+}
+
+// Bytes returns the compressed data
+func (w *gzipWriter) Bytes() []byte {
+	if buf, ok := w.buf.(*bytes.Buffer); ok {
+		return buf.Bytes()
+	}
+	return nil
+}
+
 // defaultGzipWriterFactory creates a new gzip writer
 func defaultGzipWriterFactory(w io.Writer) compressWriter {
-	return gzip.NewWriter(w)
-}
-
-// NewAPISender creates a new instance of APISender
-func NewAPISender(apiURL, projectID, applicationToken, machineName, encryptionKey string) *APISender {
-	return &APISender{
-		apiURL:           apiURL,
-		projectID:        projectID,
-		applicationToken: applicationToken,
-		machineName:      machineName,
-		encryptionKey:    encryptionKey,
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+	return &gzipWriter{
+		buf: w,
+		gw:  gzip.NewWriter(w),
 	}
-}
-
-// Send sends metrics to the configured API endpoint
-func (s *APISender) Send(metrics []collector.Metrics) error {
-	return s.SendWithContext(context.Background(), metrics)
 }
 
 // compressData compresses the input data using gzip
@@ -94,7 +102,9 @@ func compressDataWithFactory(data []byte, newWriter writerFactory) ([]byte, erro
 
 // compressDataWithWriter compresses the input data using the provided writer
 func compressDataWithWriter(data []byte, gw compressWriter) ([]byte, error) {
-	var buf bytes.Buffer
+	if data == nil {
+		data = []byte{}
+	}
 
 	if _, err := gw.Write(data); err != nil {
 		return nil, fmt.Errorf("failed to write to gzip writer: %w", err)
@@ -104,7 +114,30 @@ func compressDataWithWriter(data []byte, gw compressWriter) ([]byte, error) {
 		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
-	return buf.Bytes(), nil
+	result := gw.Bytes()
+	if result == nil {
+		return []byte{}, nil
+	}
+	return result, nil
+}
+
+// NewAPISender creates a new instance of APISender
+func NewAPISender(apiURL, projectID, applicationToken, machineName, encryptionKey string) *APISender {
+	return &APISender{
+		apiURL:           apiURL,
+		projectID:        projectID,
+		applicationToken: applicationToken,
+		machineName:      machineName,
+		encryptionKey:    encryptionKey,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
+
+// Send sends metrics to the configured API endpoint
+func (s *APISender) Send(metrics []collector.Metrics) error {
+	return s.SendWithContext(context.Background(), metrics)
 }
 
 // SendWithContext sends metrics to the configured API endpoint with context support

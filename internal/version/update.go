@@ -22,6 +22,28 @@ var (
 
 	// GitHubAPIReleaseURL is the GitHub API URL for releases
 	GitHubAPIReleaseURL = "https://api.github.com/repos/monitorly-app/probe/releases/latest"
+
+	// osExecutable is a variable to allow mocking os.Executable in tests
+	osExecutable = os.Executable
+
+	// getOS and getArch are variables to allow mocking runtime.GOOS and runtime.GOARCH in tests
+	getOS   = func() string { return runtime.GOOS }
+	getArch = func() string { return runtime.GOARCH }
+
+	// osExit is a variable to allow mocking os.Exit in tests
+	osExit = os.Exit
+
+	// updateCheckInterval is the interval between update checks
+	updateCheckInterval = 24 * time.Hour
+
+	// updateRetryDelay is the delay between retry attempts
+	updateRetryDelay = time.Minute
+
+	// downloadBinaryFunc is a variable to allow mocking downloadBinary in tests
+	downloadBinaryFunc = downloadBinary
+
+	// replaceBinaryFunc is a variable to allow mocking replaceBinary in tests
+	replaceBinaryFunc = replaceBinary
 )
 
 // GitHubRelease represents the GitHub API response for a release
@@ -117,13 +139,13 @@ func SelfUpdate() error {
 	}
 
 	// Download the new binary
-	newBinaryPath, err := downloadBinary(assetURL)
+	newBinaryPath, err := downloadBinaryFunc(assetURL)
 	if err != nil {
 		return fmt.Errorf("failed to download binary: %w", err)
 	}
 
 	// Replace the current binary
-	if err := replaceBinary(newBinaryPath); err != nil {
+	if err := replaceBinaryFunc(newBinaryPath); err != nil {
 		return fmt.Errorf("failed to replace binary: %w", err)
 	}
 
@@ -170,13 +192,13 @@ func getLatestReleaseInfo() (*GitHubRelease, error) {
 // findAppropriateAsset finds the asset for the current OS and architecture
 func findAppropriateAsset(release *GitHubRelease) (string, error) {
 	// We only build for Linux
-	if runtime.GOOS != "linux" {
-		return "", fmt.Errorf("this application only runs on Linux, current OS: %s", runtime.GOOS)
+	if getOS() != "linux" {
+		return "", fmt.Errorf("this application only runs on Linux, current OS: %s", getOS())
 	}
 
 	// Expected naming pattern: monitorly-probe-{version}-linux-{arch}
 	// Example: monitorly-probe-1.0.0-linux-amd64
-	expectedPattern := fmt.Sprintf("linux-%s", runtime.GOARCH)
+	expectedPattern := fmt.Sprintf("linux-%s", getArch())
 
 	for _, asset := range release.Assets {
 		if strings.Contains(asset.Name, expectedPattern) {
@@ -184,7 +206,7 @@ func findAppropriateAsset(release *GitHubRelease) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no matching asset found for linux/%s", runtime.GOARCH)
+	return "", fmt.Errorf("no matching asset found for linux/%s", getArch())
 }
 
 // downloadBinary downloads the binary from the given URL
@@ -246,7 +268,7 @@ func downloadBinaryWithTimeout(url string, timeout time.Duration) (string, error
 // replaceBinary replaces the current binary with the new one
 func replaceBinary(newBinaryPath string) error {
 	// Get the path to the current executable
-	execPath, err := os.Executable()
+	execPath, err := osExecutable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
@@ -327,7 +349,7 @@ func StartUpdateChecker(ctx context.Context, nextCheck time.Time, retryDelay tim
 					}
 					log.Println("Update successful. Restarting...")
 					// Exit with success code to allow service manager to restart
-					os.Exit(0)
+					osExit(0)
 				} else {
 					log.Println("No updates available")
 				}

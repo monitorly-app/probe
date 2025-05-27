@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/monitorly-app/probe/internal/collector"
 	"github.com/monitorly-app/probe/internal/serialization"
@@ -13,6 +14,7 @@ import (
 // FileLogger implements the Sender interface for logging metrics to a file
 type FileLogger struct {
 	filePath string
+	mu       sync.Mutex
 }
 
 // NewFileLogger creates a new instance of FileLogger
@@ -36,6 +38,9 @@ func (f *FileLogger) SendWithContext(ctx context.Context, metrics []collector.Me
 	default:
 		// Continue processing
 	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
 	// Ensure directory exists
 	dir := filepath.Dir(f.filePath)
