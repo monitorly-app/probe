@@ -36,13 +36,21 @@ jobs:
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
         run: |
           # Create output directory
           mkdir -p release
 
-          # Build the executable
+          # Build the executable with optimizations for smaller binary size
           BINARY_NAME=monitorly-probe
-          go build -v -ldflags="-X 'github.com/monitorly-app/probe/internal/version.Version=${{ env.VERSION }}' -X 'github.com/monitorly-app/probe/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)' -X 'github.com/monitorly-app/probe/internal/version.Commit=${GITHUB_SHA}'" -o release/${BINARY_NAME} ./cmd/probe
+
+          # Optimized build flags
+          LDFLAGS="-s -w"  # Strip debug info and symbol table
+          LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.Version=${{ env.VERSION }}'"
+          LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+          LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.Commit=${GITHUB_SHA}'"
+
+          go build -v -a -installsuffix cgo -trimpath -ldflags="$LDFLAGS" -o release/${BINARY_NAME} ./cmd/probe
 
           # Create archive with executable + config example
           cd release
@@ -119,7 +127,7 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          name: Monitorly Probe ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true

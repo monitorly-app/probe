@@ -76,10 +76,18 @@ echo "Creating tag v$VERSION..."
 git tag -a "v$VERSION" -m "Release v$VERSION"
 
 # Build the application with the version information
-echo "Building application with version v$VERSION..."
+echo "Building optimized application with version v$VERSION..."
 BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 COMMIT=$(git rev-parse HEAD)
-go build -v -ldflags="-X 'github.com/monitorly-app/probe/internal/version.Version=$VERSION' -X 'github.com/monitorly-app/probe/internal/version.BuildDate=$BUILD_DATE' -X 'github.com/monitorly-app/probe/internal/version.Commit=$COMMIT'" -o bin/monitorly-probe ./cmd/probe
+
+# Use optimized build flags for smaller binary size
+export CGO_ENABLED=0
+LDFLAGS="-s -w"  # Strip debug info and symbol table
+LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.Version=$VERSION'"
+LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.BuildDate=$BUILD_DATE'"
+LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.Commit=$COMMIT'"
+
+go build -v -a -installsuffix cgo -trimpath -ldflags="$LDFLAGS" -o bin/monitorly-probe ./cmd/probe
 
 echo
 echo "Tag v$VERSION created locally and binary built."
