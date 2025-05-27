@@ -42,7 +42,7 @@ jobs:
 
           # Build the executable
           BINARY_NAME=monitorly-probe
-          go build -v -ldflags="-X 'main.Version=${{ env.VERSION }}'" -o release/${BINARY_NAME} ./cmd/probe
+          go build -v -ldflags="-X 'github.com/monitorly-app/probe/internal/version.Version=${{ env.VERSION }}' -X 'github.com/monitorly-app/probe/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)' -X 'github.com/monitorly-app/probe/internal/version.Commit=${GITHUB_SHA}'" -o release/${BINARY_NAME} ./cmd/probe
 
           # Create archive with executable + config example
           cd release

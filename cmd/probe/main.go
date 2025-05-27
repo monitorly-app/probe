@@ -18,10 +18,8 @@ import (
 	"github.com/monitorly-app/probe/internal/config"
 	"github.com/monitorly-app/probe/internal/logger"
 	"github.com/monitorly-app/probe/internal/sender"
+	"github.com/monitorly-app/probe/internal/version"
 )
-
-// Version is set during build using ldflags
-var Version = "dev"
 
 // searchPaths returns a list of locations to search for the config file
 func searchPaths(configFlag string) []string {
@@ -78,11 +76,11 @@ func main() {
 
 	// If version flag is provided, print version and exit
 	if *showVersion {
-		fmt.Printf("Monitorly Probe v%s\n", Version)
+		fmt.Println(version.Info())
 		return
 	}
 
-	log.Printf("Starting Monitorly Probe v%s", Version)
+	log.Printf("Starting %s", version.Info())
 
 	// Find the config file
 	absConfigPath, err := findConfigFile(*configPath)
