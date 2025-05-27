@@ -2,6 +2,7 @@ package sender
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,7 @@ type APIPayload struct {
 	MachineName string              `json:"machine_name"`
 	Metrics     []collector.Metrics `json:"metrics"`
 	Encrypted   bool                `json:"encrypted"`
+	Compressed  bool                `json:"compressed"`
 }
 
 // NewAPISender creates a new instance of APISender
@@ -55,13 +57,30 @@ func (s *APISender) Send(metrics []collector.Metrics) error {
 	return s.SendWithContext(context.Background(), metrics)
 }
 
+// compressData compresses the input data using gzip
+func compressData(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+
+	if _, err := gw.Write(data); err != nil {
+		return nil, fmt.Errorf("failed to write to gzip writer: %w", err)
+	}
+
+	if err := gw.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
 // SendWithContext sends metrics to the configured API endpoint with context support
 func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Metrics) error {
-	// Create payload with machine name at the top level
+	// Create initial payload
 	payload := APIPayload{
 		MachineName: s.machineName,
 		Metrics:     metrics,
 		Encrypted:   false,
+		Compressed:  false,
 	}
 
 	// Check if we should attempt encryption
@@ -69,6 +88,7 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 
 	var jsonData []byte
 	var err error
+	var isCompressed bool
 
 	if shouldEncrypt {
 		// Marshal the payload first
@@ -84,10 +104,10 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 		}
 
 		// Create a new payload with the encrypted data
-		payload.Encrypted = true
 		jsonData, err = json.Marshal(map[string]interface{}{
 			"machine_name": s.machineName,
 			"encrypted":    true,
+			"compressed":   false,
 			"data":         encryptedData,
 		})
 		if err != nil {
@@ -101,6 +121,62 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 		}
 	}
 
+	// Compress the data if it's larger than 1KB
+	useCompression := len(jsonData) > 1024
+	var finalData []byte
+
+	if useCompression {
+		// First update the compression flag in the payload
+		if shouldEncrypt {
+			var encryptedPayload map[string]interface{}
+			if err := json.Unmarshal(jsonData, &encryptedPayload); err != nil {
+				return fmt.Errorf("error unmarshalling encrypted payload: %w", err)
+			}
+			encryptedPayload["compressed"] = true
+			jsonData, err = json.Marshal(encryptedPayload)
+			if err != nil {
+				return fmt.Errorf("error marshalling updated encrypted payload: %w", err)
+			}
+		} else {
+			payload.Compressed = true
+			jsonData, err = json.Marshal(payload)
+			if err != nil {
+				return fmt.Errorf("error marshalling updated payload: %w", err)
+			}
+		}
+
+		// Then compress the updated JSON data
+		compressedData, err := compressData(jsonData)
+		if err != nil {
+			logger.Printf("Warning: Failed to compress data: %v. Sending uncompressed.", err)
+			finalData = jsonData
+			isCompressed = false
+			// Reset compression flags since compression failed
+			if shouldEncrypt {
+				var encryptedPayload map[string]interface{}
+				if err := json.Unmarshal(jsonData, &encryptedPayload); err == nil {
+					encryptedPayload["compressed"] = false
+					if newJSON, err := json.Marshal(encryptedPayload); err == nil {
+						jsonData = newJSON
+						finalData = newJSON
+					}
+				}
+			} else {
+				payload.Compressed = false
+				if newJSON, err := json.Marshal(payload); err == nil {
+					jsonData = newJSON
+					finalData = newJSON
+				}
+			}
+		} else {
+			finalData = compressedData
+			isCompressed = true
+		}
+	} else {
+		finalData = jsonData
+		isCompressed = false
+	}
+
 	// Ensure the URL ends with a trailing slash for consistent path joining
 	baseURL := s.apiURL
 	if !strings.HasSuffix(baseURL, "/") {
@@ -110,13 +186,16 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 	// Include project ID in the URL
 	url := fmt.Sprintf("%s%s", baseURL, s.projectID)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(finalData))
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.applicationToken)
+	if useCompression && isCompressed {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {

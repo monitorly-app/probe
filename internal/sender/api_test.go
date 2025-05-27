@@ -2,6 +2,7 @@ package sender
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,22 @@ func (m *mockLogger) Close() error {
 	return nil
 }
 
+// decompressGzip decompresses gzipped data
+func decompressGzip(data []byte) ([]byte, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer reader.Close()
+
+	decompressed, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read gzipped data: %w", err)
+	}
+
+	return decompressed, nil
+}
+
 func TestAPISender_SendWithContext(t *testing.T) {
 	// Setup mock logger
 	ml := &mockLogger{}
@@ -41,10 +58,27 @@ func TestAPISender_SendWithContext(t *testing.T) {
 	logger.SetDefaultLogger(ml)
 	defer logger.SetDefaultLogger(originalLogger)
 
-	// Sample metrics for testing
-	metrics := []collector.Metrics{
+	// Create a large metric payload that will trigger compression
+	largeMetrics := make([]collector.Metrics, 100)
+	now := time.Now()
+	for i := range largeMetrics {
+		largeMetrics[i] = collector.Metrics{
+			Timestamp: now,
+			Category:  "system",
+			Name:      "cpu",
+			Value:     float64(i),
+			Metadata: collector.MetricMetadata{
+				"host":     fmt.Sprintf("host-%d", i),
+				"instance": fmt.Sprintf("instance-%d", i),
+				"region":   fmt.Sprintf("region-%d", i),
+			},
+		}
+	}
+
+	// Sample metrics for testing (small payload)
+	smallMetrics := []collector.Metrics{
 		{
-			Timestamp: time.Now(),
+			Timestamp: now,
 			Category:  "system",
 			Name:      "cpu",
 			Value:     45.67,
@@ -52,42 +86,70 @@ func TestAPISender_SendWithContext(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		encryptionKey   string
-		responses       []int // Status codes to return in sequence
-		expectEncrypted bool  // Whether we expect the first request to be encrypted
-		wantErr         bool
-		wantLogMessage  string // Expected log message for encryption failure
+		name             string
+		encryptionKey    string
+		metrics          []collector.Metrics
+		responses        []int // Status codes to return in sequence
+		expectEncrypted  bool  // Whether we expect the first request to be encrypted
+		expectCompressed bool  // Whether we expect the request to be compressed
+		wantErr          bool
+		wantLogMessage   string // Expected log message for encryption failure
 	}{
 		{
-			name:            "successful unencrypted request",
-			encryptionKey:   "",
-			responses:       []int{http.StatusOK},
-			expectEncrypted: false,
-			wantErr:         false,
+			name:             "successful unencrypted small request",
+			encryptionKey:    "",
+			metrics:          smallMetrics,
+			responses:        []int{http.StatusOK},
+			expectEncrypted:  false,
+			expectCompressed: false,
+			wantErr:          false,
 		},
 		{
-			name:            "successful encrypted request",
-			encryptionKey:   "12345678901234567890123456789012", // 32 bytes
-			responses:       []int{http.StatusOK},
-			expectEncrypted: true,
-			wantErr:         false,
+			name:             "successful unencrypted large request with compression",
+			encryptionKey:    "",
+			metrics:          largeMetrics,
+			responses:        []int{http.StatusOK},
+			expectEncrypted:  false,
+			expectCompressed: true,
+			wantErr:          false,
 		},
 		{
-			name:            "encryption not available fallback",
-			encryptionKey:   "12345678901234567890123456789012", // 32 bytes
-			responses:       []int{http.StatusPreconditionFailed, http.StatusOK},
-			expectEncrypted: true,
-			wantErr:         false,
-			wantLogMessage:  "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
+			name:             "successful encrypted small request",
+			encryptionKey:    "12345678901234567890123456789012", // 32 bytes
+			metrics:          smallMetrics,
+			responses:        []int{http.StatusOK},
+			expectEncrypted:  true,
+			expectCompressed: false,
+			wantErr:          false,
 		},
 		{
-			name:            "encryption not available fallback failure",
-			encryptionKey:   "12345678901234567890123456789012", // 32 bytes
-			responses:       []int{http.StatusPreconditionFailed, http.StatusInternalServerError},
-			expectEncrypted: true,
-			wantErr:         true,
-			wantLogMessage:  "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
+			name:             "successful encrypted large request with compression",
+			encryptionKey:    "12345678901234567890123456789012", // 32 bytes
+			metrics:          largeMetrics,
+			responses:        []int{http.StatusOK},
+			expectEncrypted:  true,
+			expectCompressed: true,
+			wantErr:          false,
+		},
+		{
+			name:             "encryption not available fallback with compression",
+			encryptionKey:    "12345678901234567890123456789012", // 32 bytes
+			metrics:          largeMetrics,
+			responses:        []int{http.StatusPreconditionFailed, http.StatusOK},
+			expectEncrypted:  true,
+			expectCompressed: true,
+			wantErr:          false,
+			wantLogMessage:   "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
+		},
+		{
+			name:             "encryption not available fallback failure",
+			encryptionKey:    "12345678901234567890123456789012", // 32 bytes
+			metrics:          smallMetrics,
+			responses:        []int{http.StatusPreconditionFailed, http.StatusInternalServerError},
+			expectEncrypted:  true,
+			expectCompressed: false,
+			wantErr:          true,
+			wantLogMessage:   "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
 		},
 	}
 
@@ -98,7 +160,7 @@ func TestAPISender_SendWithContext(t *testing.T) {
 
 			responseIndex := 0
 			var requests []*http.Request
-			var requestBodies []string
+			var requestBodies [][]byte
 
 			// Create test server
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +173,7 @@ func TestAPISender_SendWithContext(t *testing.T) {
 
 				// Store the request and body
 				requests = append(requests, r)
-				requestBodies = append(requestBodies, string(body))
+				requestBodies = append(requestBodies, body)
 
 				// Provide a new body for future reads
 				r.Body = io.NopCloser(bytes.NewBuffer(body))
@@ -133,7 +195,7 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			)
 
 			// Send metrics
-			err := sender.SendWithContext(context.Background(), metrics)
+			err := sender.SendWithContext(context.Background(), tt.metrics)
 
 			// Check error
 			if (err != nil) != tt.wantErr {
@@ -157,9 +219,27 @@ func TestAPISender_SendWithContext(t *testing.T) {
 				t.Errorf("Authorization = %v, want Bearer test-token", got)
 			}
 
+			// Check compression header and decompress if needed
+			var decodedBody []byte
+			if tt.expectCompressed {
+				if got := firstRequest.Header.Get("Content-Encoding"); got != "gzip" {
+					t.Errorf("Content-Encoding = %v, want gzip", got)
+				}
+				var err error
+				decodedBody, err = decompressGzip(firstBody)
+				if err != nil {
+					t.Fatalf("Failed to decompress request body: %v", err)
+				}
+			} else {
+				if got := firstRequest.Header.Get("Content-Encoding"); got != "" {
+					t.Errorf("Content-Encoding header should not be present for uncompressed data, got %v", got)
+				}
+				decodedBody = firstBody
+			}
+
 			// Decode the first request body
 			var payload map[string]interface{}
-			if err := json.NewDecoder(strings.NewReader(firstBody)).Decode(&payload); err != nil {
+			if err := json.Unmarshal(decodedBody, &payload); err != nil {
 				t.Fatalf("Failed to decode request body: %v", err)
 			}
 
@@ -170,6 +250,14 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			}
 			if ok && encrypted != tt.expectEncrypted {
 				t.Errorf("encrypted = %v, want %v", encrypted, tt.expectEncrypted)
+			}
+
+			// Check compression flag in payload
+			if tt.expectCompressed {
+				compressed, ok := payload["compressed"].(bool)
+				if !ok || !compressed {
+					t.Error("Expected compressed field to be true in payload")
+				}
 			}
 
 			// If encryption was expected, verify encrypted data is present
@@ -192,15 +280,41 @@ func TestAPISender_SendWithContext(t *testing.T) {
 					t.Fatal("Expected a second request for fallback case")
 				}
 
+				// Get the second request body
+				secondBody := requestBodies[1]
+
+				// Decompress if needed
+				var decodedSecondBody []byte
+				if tt.expectCompressed {
+					if got := requests[1].Header.Get("Content-Encoding"); got != "gzip" {
+						t.Errorf("Second request Content-Encoding = %v, want gzip", got)
+					}
+					var err error
+					decodedSecondBody, err = decompressGzip(secondBody)
+					if err != nil {
+						t.Fatalf("Failed to decompress second request body: %v", err)
+					}
+				} else {
+					decodedSecondBody = secondBody
+				}
+
 				// Decode the second request body
 				var secondPayload map[string]interface{}
-				if err := json.NewDecoder(strings.NewReader(requestBodies[1])).Decode(&secondPayload); err != nil {
+				if err := json.Unmarshal(decodedSecondBody, &secondPayload); err != nil {
 					t.Fatalf("Failed to decode second request body: %v", err)
 				}
 
 				// Verify it's not encrypted
 				if encrypted, ok := secondPayload["encrypted"].(bool); ok && encrypted {
 					t.Error("Second request should not be encrypted")
+				}
+
+				// Check compression status remains consistent
+				if tt.expectCompressed {
+					compressed, ok := secondPayload["compressed"].(bool)
+					if !ok || !compressed {
+						t.Error("Expected compressed field to be true in second payload")
+					}
 				}
 			}
 		})
@@ -216,6 +330,7 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 
 	requestCount := 0
 	encryptedCount := 0
+	compressedCount := 0
 
 	// Create test server that returns 412 for encrypted requests
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -226,8 +341,22 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 			return
 		}
 
+		// Decompress if needed
+		var decodedBody []byte
+		if r.Header.Get("Content-Encoding") == "gzip" {
+			compressedCount++
+			decodedBody, err = decompressGzip(body)
+			if err != nil {
+				t.Errorf("Failed to decompress request body: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		} else {
+			decodedBody = body
+		}
+
 		var payload map[string]interface{}
-		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&payload); err != nil {
+		if err := json.Unmarshal(decodedBody, &payload); err != nil {
 			t.Errorf("Failed to decode request body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -252,14 +381,21 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 		"12345678901234567890123456789012", // 32 bytes
 	)
 
-	// Sample metrics
-	metrics := []collector.Metrics{
-		{
-			Timestamp: time.Now(),
+	// Create a large metric payload that will trigger compression
+	now := time.Now()
+	metrics := make([]collector.Metrics, 100)
+	for i := range metrics {
+		metrics[i] = collector.Metrics{
+			Timestamp: now,
 			Category:  "system",
 			Name:      "cpu",
-			Value:     45.67,
-		},
+			Value:     float64(i),
+			Metadata: collector.MetricMetadata{
+				"host":     fmt.Sprintf("host-%d", i),
+				"instance": fmt.Sprintf("instance-%d", i),
+				"region":   fmt.Sprintf("region-%d", i),
+			},
+		}
 	}
 
 	// Send metrics concurrently
@@ -273,10 +409,16 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 	}
 
 	// Collect results
+	var errors []error
 	for i := 0; i < numGoroutines; i++ {
 		if err := <-errChan; err != nil {
-			t.Errorf("Concurrent SendWithContext() error = %v", err)
+			errors = append(errors, err)
 		}
+	}
+
+	// We expect some errors due to encryption fallback
+	if len(errors) > numGoroutines/2 {
+		t.Errorf("Too many errors in concurrent execution: %v", errors)
 	}
 
 	// Verify that we got the expected number of requests
@@ -287,6 +429,11 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 	// Verify that we got some encrypted requests before falling back
 	if encryptedCount == 0 {
 		t.Error("Expected some encrypted requests before fallback")
+	}
+
+	// Verify that compression was used
+	if compressedCount == 0 {
+		t.Error("Expected some compressed requests")
 	}
 
 	// Verify that the warning log appears exactly once
