@@ -26,7 +26,7 @@ var (
 type Logger struct {
 	stdLog  *log.Logger
 	fileLog *log.Logger
-	logFile *os.File
+	logFile io.WriteCloser
 }
 
 // Initialize sets up the default logger with the specified log file path
@@ -101,7 +101,9 @@ func Close() error {
 // Close closes the log file for a specific logger instance
 func (l *Logger) Close() error {
 	if l.logFile != nil {
-		return l.logFile.Close()
+		err := l.logFile.Close()
+		l.logFile = nil // Set to nil after closing to prevent double-close errors
+		return err
 	}
 	return nil
 }
@@ -121,6 +123,7 @@ func Printf(format string, v ...interface{}) {
 func (l *Logger) Printf(format string, v ...interface{}) {
 	msg := fmt.Sprintf(format, v...)
 	l.stdLog.Print(msg)
+	l.fileLog.Print(msg)
 }
 
 // Fatalf logs a formatted message and exits the program

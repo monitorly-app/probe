@@ -45,5 +45,11 @@ type Collector interface {
 
 // RoundToTwoDecimalPlaces rounds a float64 to two decimal places
 func RoundToTwoDecimalPlaces(value float64) float64 {
-	return math.Round(value*100) / 100
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return value
+	}
+	// Use math.Round to handle edge cases like 1.005 correctly
+	// We add a small epsilon to handle floating point precision issues
+	epsilon := 1e-10
+	return math.Round((value+epsilon)*100) / 100
 }

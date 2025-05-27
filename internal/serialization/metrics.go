@@ -45,6 +45,14 @@ func SerializeMetricIndented(metric collector.Metrics) ([]byte, error) {
 func WriteMetricsTo(w io.Writer, metrics []collector.Metrics, indent bool) error {
 	log.Printf("DEBUG: Writing %d metrics to output", len(metrics))
 
+	// For empty metrics, always write an empty array with a newline
+	if len(metrics) == 0 {
+		if _, err := io.WriteString(w, "[]\n"); err != nil {
+			return fmt.Errorf("failed to write empty array: %w", err)
+		}
+		return nil
+	}
+
 	if indent {
 		for i, metric := range metrics {
 			// Write each metric separately as indented JSON

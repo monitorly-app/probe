@@ -50,8 +50,8 @@ func (f *FileLogger) SendWithContext(ctx context.Context, metrics []collector.Me
 	}
 	defer file.Close()
 
-	// Use the serialization package to write metrics
-	if err := serialization.WriteMetricsTo(file, metrics, true); err != nil {
+	// Use the serialization package to write metrics (without indentation)
+	if err := serialization.WriteMetricsTo(file, metrics, false); err != nil {
 		return fmt.Errorf("failed to write metrics to log file: %w", err)
 	}
 
