@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	goversion "github.com/hashicorp/go-version"
 )
 
 const (
@@ -41,13 +43,18 @@ func CheckForUpdates() (bool, string, error) {
 		return false, "", fmt.Errorf("failed to get latest version: %w", err)
 	}
 
-	// Strip leading 'v' if present in either version
-	localVersion := strings.TrimPrefix(Version, "v")
-	remoteVersion := strings.TrimPrefix(latestVersion, "v")
+	// Parse versions using hashicorp/go-version
+	localVer, err := goversion.NewVersion(strings.TrimPrefix(Version, "v"))
+	if err != nil {
+		return false, latestVersion, nil // Invalid local version, assume no update needed
+	}
 
-	// Simple string comparison works for semantic versions
-	// If remoteVersion > localVersion, an update is available
-	return remoteVersion > localVersion, latestVersion, nil
+	remoteVer, err := goversion.NewVersion(strings.TrimPrefix(latestVersion, "v"))
+	if err != nil {
+		return false, latestVersion, nil // Invalid remote version, assume no update needed
+	}
+
+	return remoteVer.GreaterThan(localVer), latestVersion, nil
 }
 
 // GetLatestVersionFromGitHub fetches the latest version from GitHub
@@ -184,7 +191,12 @@ func findAppropriateAsset(release *GitHubRelease) (string, error) {
 
 // downloadBinary downloads the binary from the given URL
 func downloadBinary(url string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	return downloadBinaryWithTimeout(url, 5*time.Minute)
+}
+
+// downloadBinaryWithTimeout downloads the binary from the given URL with a specified timeout
+func downloadBinaryWithTimeout(url string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -205,25 +217,32 @@ func downloadBinary(url string) (string, error) {
 		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	// Create a temporary file to download to
-	tempFile, err := os.CreateTemp("", "monitorly-probe-update-*")
+	// Check for empty response
+	if resp.ContentLength == 0 {
+		return "", fmt.Errorf("empty response body")
+	}
+
+	// Create a temporary file to store the binary
+	tmpFile, err := os.CreateTemp("", "monitorly-probe-update-*")
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
+		return "", fmt.Errorf("failed to create temporary file: %w", err)
 	}
-	defer tempFile.Close()
+	defer tmpFile.Close()
 
-	// Set executable permissions
-	if err := os.Chmod(tempFile.Name(), 0755); err != nil {
-		return "", fmt.Errorf("failed to set permissions: %w", err)
-	}
-
-	// Copy the response body to the file
-	_, err = io.Copy(tempFile, resp.Body)
+	// Copy the response body to the temporary file
+	written, err := io.Copy(tmpFile, resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to download file: %w", err)
+		os.Remove(tmpFile.Name()) // Clean up on error
+		return "", fmt.Errorf("failed to write binary: %w", err)
 	}
 
-	return tempFile.Name(), nil
+	// Double-check that we actually wrote some data
+	if written == 0 {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("no data written to file")
+	}
+
+	return tmpFile.Name(), nil
 }
 
 // replaceBinary replaces the current binary with the new one

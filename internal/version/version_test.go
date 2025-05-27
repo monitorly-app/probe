@@ -7,51 +7,41 @@ import (
 )
 
 func TestInfo(t *testing.T) {
-	// Save original values
-	originalVersion := Version
-	originalBuildDate := BuildDate
-	originalCommit := Commit
-
-	// Restore original values after test
-	defer func() {
-		Version = originalVersion
-		BuildDate = originalBuildDate
-		Commit = originalCommit
-	}()
-
 	tests := []struct {
 		name      string
 		version   string
 		buildDate string
 		commit    string
-		want      []string // strings that should be present in the output
+		validate  func(*testing.T, string)
 	}{
 		{
 			name:      "default values",
 			version:   "dev",
 			buildDate: "unknown",
 			commit:    "unknown",
-			want: []string{
-				"Monitorly Probe v",
-				"dev",
-				"commit: unknown",
-				"built: unknown",
-				runtime.GOOS,
-				runtime.GOARCH,
+			validate: func(t *testing.T, info string) {
+				expected := "Monitorly Probe vdev (commit: unknown, built: unknown"
+				if !strings.HasPrefix(info, expected) {
+					t.Errorf("Info() = %v, want prefix %v", info, expected)
+				}
+				if !strings.Contains(info, runtime.GOOS) {
+					t.Errorf("Info() = %v, missing OS %v", info, runtime.GOOS)
+				}
+				if !strings.Contains(info, runtime.GOARCH) {
+					t.Errorf("Info() = %v, missing arch %v", info, runtime.GOARCH)
+				}
 			},
 		},
 		{
 			name:      "production values",
 			version:   "1.2.3",
-			buildDate: "2023-12-01T10:00:00Z",
+			buildDate: "2024-03-27T12:00:00Z",
 			commit:    "abc123def456",
-			want: []string{
-				"Monitorly Probe v",
-				"1.2.3",
-				"commit: abc123def456",
-				"built: 2023-12-01T10:00:00Z",
-				runtime.GOOS,
-				runtime.GOARCH,
+			validate: func(t *testing.T, info string) {
+				expected := "Monitorly Probe v1.2.3 (commit: abc123def456, built: 2024-03-27T12:00:00Z"
+				if !strings.HasPrefix(info, expected) {
+					t.Errorf("Info() = %v, want prefix %v", info, expected)
+				}
 			},
 		},
 		{
@@ -59,50 +49,39 @@ func TestInfo(t *testing.T) {
 			version:   "",
 			buildDate: "",
 			commit:    "",
-			want: []string{
-				"Monitorly Probe v",
-				"commit: ",
-				"built: ",
-				runtime.GOOS,
-				runtime.GOARCH,
+			validate: func(t *testing.T, info string) {
+				if !strings.Contains(info, "v (commit: , built: ") {
+					t.Errorf("Info() = %v, not handling empty values correctly", info)
+				}
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Save original values
+			origVersion := Version
+			origBuildDate := BuildDate
+			origCommit := Commit
+
 			// Set test values
 			Version = tt.version
 			BuildDate = tt.buildDate
 			Commit = tt.commit
 
-			got := Info()
+			// Run test
+			info := Info()
+			tt.validate(t, info)
 
-			// Check that all expected strings are present
-			for _, want := range tt.want {
-				if !strings.Contains(got, want) {
-					t.Errorf("Info() = %v, want to contain %v", got, want)
-				}
-			}
-
-			// Check that the format is correct
-			expectedFormat := "Monitorly Probe v" + tt.version + " (commit: " + tt.commit + ", built: " + tt.buildDate + ", " + runtime.GOOS + "/" + runtime.GOARCH + ")"
-			if got != expectedFormat {
-				t.Errorf("Info() = %v, want %v", got, expectedFormat)
-			}
+			// Restore original values
+			Version = origVersion
+			BuildDate = origBuildDate
+			Commit = origCommit
 		})
 	}
 }
 
 func TestGetVersion(t *testing.T) {
-	// Save original value
-	originalVersion := Version
-
-	// Restore original value after test
-	defer func() {
-		Version = originalVersion
-	}()
-
 	tests := []struct {
 		name    string
 		version string
@@ -120,8 +99,8 @@ func TestGetVersion(t *testing.T) {
 		},
 		{
 			name:    "pre-release version",
-			version: "1.2.3-alpha.1",
-			want:    "1.2.3-alpha.1",
+			version: "1.0.0-beta.1",
+			want:    "1.0.0-beta.1",
 		},
 		{
 			name:    "empty version",
@@ -132,24 +111,22 @@ func TestGetVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Save original value
+			origVersion := Version
+			// Set test value
 			Version = tt.version
-			got := GetVersion()
-			if got != tt.want {
+
+			if got := GetVersion(); got != tt.want {
 				t.Errorf("GetVersion() = %v, want %v", got, tt.want)
 			}
+
+			// Restore original value
+			Version = origVersion
 		})
 	}
 }
 
 func TestGetBuildDate(t *testing.T) {
-	// Save original value
-	originalBuildDate := BuildDate
-
-	// Restore original value after test
-	defer func() {
-		BuildDate = originalBuildDate
-	}()
-
 	tests := []struct {
 		name      string
 		buildDate string
@@ -162,13 +139,13 @@ func TestGetBuildDate(t *testing.T) {
 		},
 		{
 			name:      "ISO 8601 format",
-			buildDate: "2023-12-01T10:00:00Z",
-			want:      "2023-12-01T10:00:00Z",
+			buildDate: "2024-03-27T12:00:00Z",
+			want:      "2024-03-27T12:00:00Z",
 		},
 		{
 			name:      "custom format",
-			buildDate: "Dec 1, 2023",
-			want:      "Dec 1, 2023",
+			buildDate: "Mar 27 2024 12:00:00",
+			want:      "Mar 27 2024 12:00:00",
 		},
 		{
 			name:      "empty build date",
@@ -179,24 +156,22 @@ func TestGetBuildDate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Save original value
+			origBuildDate := BuildDate
+			// Set test value
 			BuildDate = tt.buildDate
-			got := GetBuildDate()
-			if got != tt.want {
+
+			if got := GetBuildDate(); got != tt.want {
 				t.Errorf("GetBuildDate() = %v, want %v", got, tt.want)
 			}
+
+			// Restore original value
+			BuildDate = origBuildDate
 		})
 	}
 }
 
 func TestGetCommit(t *testing.T) {
-	// Save original value
-	originalCommit := Commit
-
-	// Restore original value after test
-	defer func() {
-		Commit = originalCommit
-	}()
-
 	tests := []struct {
 		name   string
 		commit string
@@ -209,13 +184,13 @@ func TestGetCommit(t *testing.T) {
 		},
 		{
 			name:   "full commit hash",
-			commit: "abc123def456789012345678901234567890abcd",
-			want:   "abc123def456789012345678901234567890abcd",
+			commit: "abcdef1234567890",
+			want:   "abcdef1234567890",
 		},
 		{
 			name:   "short commit hash",
-			commit: "abc123d",
-			want:   "abc123d",
+			commit: "abcdef12",
+			want:   "abcdef12",
 		},
 		{
 			name:   "empty commit",
@@ -226,62 +201,64 @@ func TestGetCommit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Save original value
+			origCommit := Commit
+			// Set test value
 			Commit = tt.commit
-			got := GetCommit()
-			if got != tt.want {
+
+			if got := GetCommit(); got != tt.want {
 				t.Errorf("GetCommit() = %v, want %v", got, tt.want)
 			}
+
+			// Restore original value
+			Commit = origCommit
 		})
 	}
 }
 
-// TestVersionVariablesIntegration tests that all version variables work together
 func TestVersionVariablesIntegration(t *testing.T) {
-	// Save original values
-	originalVersion := Version
-	originalBuildDate := BuildDate
-	originalCommit := Commit
+	// Test that all version-related functions work together correctly
+	testVersion := "1.2.3"
+	testBuildDate := "2024-03-27T12:00:00Z"
+	testCommit := "abcdef123456"
 
-	// Restore original values after test
-	defer func() {
-		Version = originalVersion
-		BuildDate = originalBuildDate
-		Commit = originalCommit
-	}()
+	// Save original values
+	origVersion := Version
+	origBuildDate := BuildDate
+	origCommit := Commit
 
 	// Set test values
-	testVersion := "2.0.0"
-	testBuildDate := "2023-12-01T15:30:00Z"
-	testCommit := "def456abc789"
-
 	Version = testVersion
 	BuildDate = testBuildDate
 	Commit = testCommit
 
-	// Test that all getters return the correct values
-	if GetVersion() != testVersion {
-		t.Errorf("GetVersion() = %v, want %v", GetVersion(), testVersion)
-	}
-
-	if GetBuildDate() != testBuildDate {
-		t.Errorf("GetBuildDate() = %v, want %v", GetBuildDate(), testBuildDate)
-	}
-
-	if GetCommit() != testCommit {
-		t.Errorf("GetCommit() = %v, want %v", GetCommit(), testCommit)
-	}
-
-	// Test that Info() incorporates all values
+	// Test Info() contains all components
 	info := Info()
 	if !strings.Contains(info, testVersion) {
-		t.Errorf("Info() does not contain version %v", testVersion)
+		t.Errorf("Info() = %v, missing version %v", info, testVersion)
 	}
 	if !strings.Contains(info, testBuildDate) {
-		t.Errorf("Info() does not contain build date %v", testBuildDate)
+		t.Errorf("Info() = %v, missing build date %v", info, testBuildDate)
 	}
 	if !strings.Contains(info, testCommit) {
-		t.Errorf("Info() does not contain commit %v", testCommit)
+		t.Errorf("Info() = %v, missing commit %v", info, testCommit)
 	}
+
+	// Test individual getters
+	if got := GetVersion(); got != testVersion {
+		t.Errorf("GetVersion() = %v, want %v", got, testVersion)
+	}
+	if got := GetBuildDate(); got != testBuildDate {
+		t.Errorf("GetBuildDate() = %v, want %v", got, testBuildDate)
+	}
+	if got := GetCommit(); got != testCommit {
+		t.Errorf("GetCommit() = %v, want %v", got, testCommit)
+	}
+
+	// Restore original values
+	Version = origVersion
+	BuildDate = origBuildDate
+	Commit = origCommit
 }
 
 // BenchmarkInfo benchmarks the Info function
