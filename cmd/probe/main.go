@@ -72,6 +72,9 @@ func main() {
 	// Parse command-line flags
 	configPath := flag.String("config", "config.yaml", "Path to the configuration file")
 	showVersion := flag.Bool("version", false, "Show version information and exit")
+	checkUpdate := flag.Bool("check-update", false, "Check for updates and exit")
+	skipUpdateCheck := flag.Bool("skip-update-check", false, "Skip update check at startup")
+	forceUpdate := flag.Bool("update", false, "Check for updates and update if available")
 	flag.Parse()
 
 	// If version flag is provided, print version and exit
@@ -80,7 +83,68 @@ func main() {
 		return
 	}
 
+	// If check-update flag is provided, check for updates and exit
+	if *checkUpdate {
+		updateAvailable, latestVersion, err := version.CheckForUpdates()
+		if err != nil {
+			fmt.Printf("Error checking for updates: %v\n", err)
+			os.Exit(1)
+		}
+
+		if updateAvailable {
+			fmt.Printf("Update available: %s (current: %s)\n", latestVersion, version.GetVersion())
+			fmt.Println("Run with --update to automatically update")
+		} else {
+			fmt.Println("No updates available, you are running the latest version")
+		}
+		return
+	}
+
+	// If update flag is provided, update and exit
+	if *forceUpdate {
+		fmt.Println("Checking for updates...")
+		updateAvailable, latestVersion, err := version.CheckForUpdates()
+		if err != nil {
+			fmt.Printf("Error checking for updates: %v\n", err)
+			os.Exit(1)
+		}
+
+		if updateAvailable {
+			fmt.Printf("Update available: %s (current: %s). Updating...\n", latestVersion, version.GetVersion())
+			if err := version.SelfUpdate(); err != nil {
+				fmt.Printf("Error updating: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Update successful. Please restart the application.")
+			os.Exit(0)
+		} else {
+			fmt.Println("No updates available, you are running the latest version")
+			return
+		}
+	}
+
 	log.Printf("Starting %s", version.Info())
+
+	// Check for updates at startup, unless skipped
+	if !*skipUpdateCheck {
+		log.Println("Checking for updates...")
+		updateAvailable, latestVersion, err := version.CheckForUpdates()
+		if err != nil {
+			log.Printf("Error checking for updates: %v", err)
+		} else if updateAvailable {
+			log.Printf("Update available: %s (current: %s). Updating...", latestVersion, version.GetVersion())
+			if err := version.SelfUpdate(); err != nil {
+				log.Printf("Error updating: %v", err)
+			} else {
+				log.Println("Update successful. Restarting...")
+				// Restart the application - just exit with success code
+				// and let the service manager restart the application
+				os.Exit(0)
+			}
+		} else {
+			log.Println("No updates available")
+		}
+	}
 
 	// Find the config file
 	absConfigPath, err := findConfigFile(*configPath)
@@ -125,6 +189,18 @@ func main() {
 
 	// Start config watcher goroutine
 	go watchConfigFile(ctx, watcher, absConfigPath, restartChan)
+
+	// Start update checker if enabled
+	if cfg.Updates.Enabled {
+		nextCheck, err := cfg.GetUpdateCheckTime()
+		if err != nil {
+			log.Printf("Error parsing update check time: %v, using default (midnight)", err)
+			nextCheck = time.Now().Add(24 * time.Hour).Truncate(24 * time.Hour) // Next midnight
+		}
+		retryDelay := cfg.GetUpdateRetryDelay()
+		log.Printf("Automatic updates enabled, next check at %s", nextCheck.Format("2006-01-02 15:04:05"))
+		version.StartUpdateChecker(ctx, nextCheck, retryDelay)
+	}
 
 	// Main application loop
 	for {

@@ -41,6 +41,11 @@ type Config struct {
 	Logging struct {
 		FilePath string `yaml:"file_path"`
 	} `yaml:"logging"`
+	Updates struct {
+		Enabled    bool          `yaml:"enabled"`
+		CheckTime  string        `yaml:"check_time"`  // Time of day to check for updates (HH:MM format)
+		RetryDelay time.Duration `yaml:"retry_delay"` // How long to wait before retrying after a failed update
+	} `yaml:"updates"`
 }
 
 // MountPoint represents a disk mount point configuration
@@ -190,4 +195,40 @@ func validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// GetUpdateCheckTime returns the time to check for updates, defaulting to midnight if not specified
+func (c *Config) GetUpdateCheckTime() (time.Time, error) {
+	if c.Updates.CheckTime == "" {
+		c.Updates.CheckTime = "00:00" // Default to midnight
+	}
+
+	// Parse the time string
+	now := time.Now()
+	checkTime, err := time.Parse("15:04", c.Updates.CheckTime)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid check_time format (use HH:MM): %w", err)
+	}
+
+	// Create a time.Time for today at the specified time
+	scheduledTime := time.Date(
+		now.Year(), now.Month(), now.Day(),
+		checkTime.Hour(), checkTime.Minute(), 0, 0,
+		now.Location(),
+	)
+
+	// If the scheduled time has already passed today, schedule for tomorrow
+	if scheduledTime.Before(now) {
+		scheduledTime = scheduledTime.Add(24 * time.Hour)
+	}
+
+	return scheduledTime, nil
+}
+
+// GetUpdateRetryDelay returns the delay between update retries, defaulting to 1 hour
+func (c *Config) GetUpdateRetryDelay() time.Duration {
+	if c.Updates.RetryDelay == 0 {
+		return time.Hour // Default to 1 hour
+	}
+	return c.Updates.RetryDelay
 }

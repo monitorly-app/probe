@@ -57,6 +57,38 @@ Available options:
 
 After installation, you'll need to edit the configuration file to suit your needs, particularly if you want to send metrics to the Monitorly API.
 
+## Automatic Updates
+
+Monitorly Probe supports automatic update checking and self-updating. When the probe starts, it automatically checks for new versions and can update itself if a newer version is available.
+
+### Update Commands
+
+The probe includes several commands for managing updates:
+
+```bash
+# Check if updates are available without installing them
+monitorly-probe --check-update
+
+# Download and install the latest version
+monitorly-probe --update
+
+# Skip the update check at startup
+monitorly-probe --skip-update-check
+```
+
+By default, the probe will check for updates at startup and automatically update itself if a newer version is available. This behavior can be disabled with the `--skip-update-check` flag.
+
+### Update Process
+
+When the probe updates itself:
+
+1. It downloads the latest version from the GitHub releases page
+2. Verifies the downloaded binary matches the expected platform and architecture
+3. Replaces the running binary with the new version
+4. Exits with a success code (0) to allow service managers to restart it
+
+The update process is designed to be minimally disruptive, with only a brief interruption of service during the restart.
+
 ## Setup for Development
 
 ### Prerequisites
