@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,6 +39,20 @@ type APIPayload struct {
 	Compressed  bool                `json:"compressed"`
 }
 
+// compressWriter is an interface that wraps the basic Write and Close methods
+type compressWriter interface {
+	Write(p []byte) (n int, err error)
+	Close() error
+}
+
+// writerFactory is a function type that creates a new compressWriter
+type writerFactory func(io.Writer) compressWriter
+
+// defaultGzipWriterFactory creates a new gzip writer
+func defaultGzipWriterFactory(w io.Writer) compressWriter {
+	return gzip.NewWriter(w)
+}
+
 // NewAPISender creates a new instance of APISender
 func NewAPISender(apiURL, projectID, applicationToken, machineName, encryptionKey string) *APISender {
 	return &APISender{
@@ -59,8 +74,27 @@ func (s *APISender) Send(metrics []collector.Metrics) error {
 
 // compressData compresses the input data using gzip
 func compressData(data []byte) ([]byte, error) {
+	return compressDataWithFactory(data, defaultGzipWriterFactory)
+}
+
+// compressDataWithFactory compresses the input data using the provided writer factory
+func compressDataWithFactory(data []byte, newWriter writerFactory) ([]byte, error) {
 	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
+	gw := newWriter(&buf)
+	if _, err := gw.Write(data); err != nil {
+		return nil, fmt.Errorf("failed to write to gzip writer: %w", err)
+	}
+
+	if err := gw.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// compressDataWithWriter compresses the input data using the provided writer
+func compressDataWithWriter(data []byte, gw compressWriter) ([]byte, error) {
+	var buf bytes.Buffer
 
 	if _, err := gw.Write(data); err != nil {
 		return nil, fmt.Errorf("failed to write to gzip writer: %w", err)

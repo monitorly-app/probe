@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,6 +52,200 @@ func decompressGzip(data []byte) ([]byte, error) {
 	return decompressed, nil
 }
 
+// mockCompressWriter implements the compressWriter interface for testing
+type mockCompressWriter struct {
+	writeErr error
+	closeErr error
+	buf      *bytes.Buffer
+}
+
+func (m *mockCompressWriter) Write(p []byte) (n int, err error) {
+	if m.writeErr != nil {
+		return 0, m.writeErr
+	}
+	return m.buf.Write(p)
+}
+
+func (m *mockCompressWriter) Close() error {
+	return m.closeErr
+}
+
+// Test the Send method directly
+func TestAPISender_Send(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sender := NewAPISender(
+		server.URL,
+		"test-project",
+		"test-token",
+		"test-machine",
+		"",
+	)
+
+	metrics := []collector.Metrics{
+		{
+			Timestamp: time.Now(),
+			Category:  "system",
+			Name:      "cpu",
+			Value:     45.67,
+		},
+	}
+
+	if err := sender.Send(metrics); err != nil {
+		t.Errorf("Send() error = %v", err)
+	}
+}
+
+// Test compression function directly
+func Test_compressData(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr bool
+	}{
+		{
+			name:    "valid data",
+			data:    []byte("test data for compression"),
+			wantErr: false,
+		},
+		{
+			name:    "empty data",
+			data:    []byte{},
+			wantErr: false,
+		},
+		{
+			name:    "nil data",
+			data:    nil,
+			wantErr: false,
+		},
+		{
+			name:    "large data",
+			data:    bytes.Repeat([]byte("a"), 1000),
+			wantErr: false,
+		},
+		{
+			name:    "unicode data",
+			data:    []byte("测试数据压缩"),
+			wantErr: false,
+		},
+		{
+			name:    "binary data",
+			data:    []byte{0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD},
+			wantErr: false,
+		},
+		{
+			name:    "json data",
+			data:    []byte(`{"test": "data", "array": [1,2,3], "nested": {"key": "value"}}`),
+			wantErr: false,
+		},
+		{
+			name:    "mixed content",
+			data:    []byte("text with numbers 12345 and special chars !@#$%^&*()"),
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compressed, err := compressData(tt.data)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("compressData() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				// Verify compression actually happened
+				if len(compressed) > 0 {
+					// Check gzip header magic numbers
+					if len(compressed) < 2 || compressed[0] != 0x1f || compressed[1] != 0x8b {
+						t.Error("Output is not in gzip format")
+					}
+				}
+
+				// Verify we can decompress the data
+				decompressed, err := decompressGzip(compressed)
+				if err != nil {
+					t.Errorf("Failed to decompress data: %v", err)
+					return
+				}
+
+				// Verify the decompressed data matches the original
+				if !bytes.Equal(decompressed, tt.data) {
+					t.Errorf("Decompressed data doesn't match original.\nGot: %v\nWant: %v", decompressed, tt.data)
+				}
+
+				// For non-empty input, verify some compression happened
+				if len(tt.data) > 20 && len(compressed) >= len(tt.data) {
+					t.Logf("Warning: No compression achieved for %s (original: %d bytes, compressed: %d bytes)",
+						tt.name, len(tt.data), len(compressed))
+				}
+			}
+		})
+	}
+}
+
+// Test error cases for compressData
+func Test_compressData_errors(t *testing.T) {
+	tests := []struct {
+		name          string
+		writerFactory writerFactory
+		data          []byte
+		expectedError string
+	}{
+		{
+			name: "write error",
+			writerFactory: func(w io.Writer) compressWriter {
+				return &mockCompressWriter{
+					writeErr: errors.New("mock write error"),
+					buf:      &bytes.Buffer{},
+				}
+			},
+			data:          []byte("test data"),
+			expectedError: "failed to write to gzip writer",
+		},
+		{
+			name: "close error",
+			writerFactory: func(w io.Writer) compressWriter {
+				return &mockCompressWriter{
+					closeErr: errors.New("mock close error"),
+					buf:      &bytes.Buffer{},
+				}
+			},
+			data:          []byte("test data"),
+			expectedError: "failed to close gzip writer",
+		},
+		{
+			name: "write and close error",
+			writerFactory: func(w io.Writer) compressWriter {
+				return &mockCompressWriter{
+					writeErr: errors.New("mock write error"),
+					closeErr: errors.New("mock close error"),
+					buf:      &bytes.Buffer{},
+				}
+			},
+			data:          []byte("test data"),
+			expectedError: "failed to write to gzip writer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := compressDataWithFactory(tt.data, tt.writerFactory)
+			if err == nil {
+				t.Error("expected error, got nil")
+				return
+			}
+
+			if !strings.Contains(err.Error(), tt.expectedError) {
+				t.Errorf("expected error containing %q, got %q", tt.expectedError, err.Error())
+			}
+		})
+	}
+}
+
 func TestAPISender_SendWithContext(t *testing.T) {
 	// Setup mock logger
 	ml := &mockLogger{}
@@ -87,17 +282,22 @@ func TestAPISender_SendWithContext(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		encryptionKey    string
+		setupSender      func(server *httptest.Server) *APISender
+		setupContext     func() (context.Context, context.CancelFunc)
 		metrics          []collector.Metrics
 		responses        []int // Status codes to return in sequence
 		expectEncrypted  bool  // Whether we expect the first request to be encrypted
 		expectCompressed bool  // Whether we expect the request to be compressed
 		wantErr          bool
 		wantLogMessage   string // Expected log message for encryption failure
+		skipRequestCheck bool   // Skip request validation for error cases
 	}{
 		{
-			name:             "successful unencrypted small request",
-			encryptionKey:    "",
+			name: "successful unencrypted small request",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
+			},
+			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          smallMetrics,
 			responses:        []int{http.StatusOK},
 			expectEncrypted:  false,
@@ -105,8 +305,11 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			wantErr:          false,
 		},
 		{
-			name:             "successful unencrypted large request with compression",
-			encryptionKey:    "",
+			name: "successful unencrypted large request with compression",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
+			},
+			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          largeMetrics,
 			responses:        []int{http.StatusOK},
 			expectEncrypted:  false,
@@ -114,8 +317,11 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			wantErr:          false,
 		},
 		{
-			name:             "successful encrypted small request",
-			encryptionKey:    "12345678901234567890123456789012", // 32 bytes
+			name: "successful encrypted small request",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "12345678901234567890123456789012")
+			},
+			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          smallMetrics,
 			responses:        []int{http.StatusOK},
 			expectEncrypted:  true,
@@ -123,8 +329,11 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			wantErr:          false,
 		},
 		{
-			name:             "successful encrypted large request with compression",
-			encryptionKey:    "12345678901234567890123456789012", // 32 bytes
+			name: "successful encrypted large request with compression",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "12345678901234567890123456789012")
+			},
+			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          largeMetrics,
 			responses:        []int{http.StatusOK},
 			expectEncrypted:  true,
@@ -132,8 +341,11 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			wantErr:          false,
 		},
 		{
-			name:             "encryption not available fallback with compression",
-			encryptionKey:    "12345678901234567890123456789012", // 32 bytes
+			name: "encryption not available fallback with compression",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "12345678901234567890123456789012")
+			},
+			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          largeMetrics,
 			responses:        []int{http.StatusPreconditionFailed, http.StatusOK},
 			expectEncrypted:  true,
@@ -142,14 +354,61 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			wantLogMessage:   "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
 		},
 		{
-			name:             "encryption not available fallback failure",
-			encryptionKey:    "12345678901234567890123456789012", // 32 bytes
+			name: "encryption not available fallback failure",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "12345678901234567890123456789012")
+			},
+			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          smallMetrics,
 			responses:        []int{http.StatusPreconditionFailed, http.StatusInternalServerError},
 			expectEncrypted:  true,
 			expectCompressed: false,
 			wantErr:          true,
 			wantLogMessage:   "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
+		},
+		{
+			name: "invalid URL",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender("invalid://url", "test-project", "test-token", "test-machine", "")
+			},
+			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
+			metrics:          smallMetrics,
+			wantErr:          true,
+			skipRequestCheck: true,
+		},
+		{
+			name: "context cancelled",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
+			},
+			setupContext: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel() // Cancel immediately
+				return ctx, cancel
+			},
+			metrics:          smallMetrics,
+			wantErr:          true,
+			skipRequestCheck: true,
+		},
+		{
+			name: "server error",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
+			},
+			setupContext: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
+			metrics:      smallMetrics,
+			responses:    []int{http.StatusInternalServerError},
+			wantErr:      true,
+		},
+		{
+			name: "invalid encryption key length",
+			setupSender: func(server *httptest.Server) *APISender {
+				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "invalid-key")
+			},
+			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
+			metrics:          smallMetrics,
+			wantErr:          true,
+			skipRequestCheck: true,
 		},
 	}
 
@@ -178,28 +437,35 @@ func TestAPISender_SendWithContext(t *testing.T) {
 				// Provide a new body for future reads
 				r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-				w.WriteHeader(tt.responses[responseIndex])
-				if responseIndex < len(tt.responses)-1 {
-					responseIndex++
+				if tt.responses != nil && len(tt.responses) > 0 {
+					w.WriteHeader(tt.responses[responseIndex])
+					if responseIndex < len(tt.responses)-1 {
+						responseIndex++
+					}
+				} else {
+					w.WriteHeader(http.StatusOK)
 				}
 			}))
 			defer server.Close()
 
 			// Create sender
-			sender := NewAPISender(
-				server.URL,
-				"test-project",
-				"test-token",
-				"test-machine",
-				tt.encryptionKey,
-			)
+			sender := tt.setupSender(server)
+
+			// Get context
+			ctx, cancel := tt.setupContext()
+			defer cancel()
 
 			// Send metrics
-			err := sender.SendWithContext(context.Background(), tt.metrics)
+			err := sender.SendWithContext(ctx, tt.metrics)
 
 			// Check error
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SendWithContext() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			// Skip request validation for error cases where no request is expected
+			if tt.skipRequestCheck {
 				return
 			}
 
@@ -442,5 +708,148 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 	count := strings.Count(logContent, expectedLog)
 	if count != 1 {
 		t.Errorf("Expected exactly one encryption warning log, got %d", count)
+	}
+}
+
+// Test error cases for SendWithContext
+func TestAPISender_SendWithContext_Errors(t *testing.T) {
+	// Setup mock logger
+	ml := &mockLogger{}
+	originalLogger := logger.GetDefaultLogger()
+	logger.SetDefaultLogger(ml)
+	defer logger.SetDefaultLogger(originalLogger)
+
+	tests := []struct {
+		name          string
+		setupServer   func() *httptest.Server
+		setupContext  func() (context.Context, context.CancelFunc)
+		metrics       []collector.Metrics
+		encryptionKey string
+		wantErr       bool
+	}{
+		{
+			name: "server timeout",
+			setupServer: func() *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					time.Sleep(200 * time.Millisecond)
+					w.WriteHeader(http.StatusOK)
+				}))
+			},
+			setupContext: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 100*time.Millisecond)
+			},
+			metrics: []collector.Metrics{
+				{
+					Timestamp: time.Now(),
+					Category:  "system",
+					Name:      "cpu",
+					Value:     45.67,
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "server closes connection",
+			setupServer: func() *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					hj, ok := w.(http.Hijacker)
+					if !ok {
+						t.Fatal("webserver doesn't support hijacking")
+					}
+					conn, _, err := hj.Hijack()
+					if err != nil {
+						t.Fatal(err)
+					}
+					conn.Close()
+				}))
+			},
+			setupContext: func() (context.Context, context.CancelFunc) {
+				return context.Background(), func() {}
+			},
+			metrics: []collector.Metrics{
+				{
+					Timestamp: time.Now(),
+					Category:  "system",
+					Name:      "cpu",
+					Value:     45.67,
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid encryption key length",
+			setupServer: func() *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+			},
+			setupContext: func() (context.Context, context.CancelFunc) {
+				return context.Background(), func() {}
+			},
+			metrics: []collector.Metrics{
+				{
+					Timestamp: time.Now(),
+					Category:  "system",
+					Name:      "cpu",
+					Value:     45.67,
+				},
+			},
+			encryptionKey: "invalid-key-length",
+			wantErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.setupServer()
+			defer server.Close()
+
+			ctx, cancel := tt.setupContext()
+			defer cancel()
+
+			sender := NewAPISender(
+				server.URL,
+				"test-project",
+				"test-token",
+				"test-machine",
+				tt.encryptionKey,
+			)
+
+			err := sender.SendWithContext(ctx, tt.metrics)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SendWithContext() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Test the default gzip writer factory
+func Test_defaultGzipWriterFactory(t *testing.T) {
+	var buf bytes.Buffer
+	writer := defaultGzipWriterFactory(&buf)
+
+	testData := []byte("test data for compression")
+	if _, err := writer.Write(testData); err != nil {
+		t.Errorf("Write() error = %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Errorf("Close() error = %v", err)
+	}
+
+	// Verify the output is valid gzip data
+	reader, err := gzip.NewReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Errorf("NewReader() error = %v", err)
+	}
+	defer reader.Close()
+
+	decompressed, err := io.ReadAll(reader)
+	if err != nil {
+		t.Errorf("ReadAll() error = %v", err)
+	}
+
+	if !bytes.Equal(decompressed, testData) {
+		t.Errorf("Decompressed data = %v, want %v", decompressed, testData)
 	}
 }
