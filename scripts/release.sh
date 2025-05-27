@@ -32,13 +32,43 @@ if git rev-parse "v$VERSION" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Update version in README if it exists
+# Run tests with coverage
+echo "Running test suite with coverage..."
+go test -v -coverprofile=coverage.out ./...
+TEST_EXIT_CODE=$?
+
+# Calculate total coverage
+COVERAGE_PCT=$(go tool cover -func=coverage.out | grep total: | awk '{print $3}' | sed 's/%//')
+
+# Update badges in README based on test results
 if [[ -f "README.md" ]]; then
-  echo "Updating version in README.md..."
-  sed -i.bak "s/badge\/version-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-blue/badge\/version-v$VERSION-blue/g" README.md
+  echo "Updating badges in README.md..."
+
+  # Update build badge based on test results
+  if [ $TEST_EXIT_CODE -eq 0 ]; then
+    BUILD_STATUS="passing-brightgreen"
+    echo "Tests passed successfully!"
+  else
+    BUILD_STATUS="failed-brightred"
+    echo "Tests failed!"
+    exit 1
+  fi
+
+  # Update build badge
+  sed -i.bak 's|badge/build-[^-]*-[^"]*|badge/build-'"$BUILD_STATUS"'|g' README.md
+
+  # Update coverage badge (encode % as %25)
+  sed -i.bak 's|badge/coverage-[^-]*-[^"]*|badge/coverage-'"${COVERAGE_PCT}"'%25-violet|g' README.md
+
+  # Update version badge
+  sed -i.bak 's|badge/version-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-blue|badge/version-v'"$VERSION"'-blue|g' README.md
+
+  # Clean up backup files
   rm README.md.bak
+
+  # Stage the changes
   git add README.md
-  git commit -m "Bump version to $VERSION in README"
+  git commit -m "Update badges and bump version to $VERSION"
 fi
 
 # Create tag and push

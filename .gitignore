@@ -2,3 +2,4 @@ bin/**
 *.log
 config.yaml
 TODO.md
+coverage.out

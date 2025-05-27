@@ -2,6 +2,8 @@
 
 <p align="center">
 <a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/version-v0.1.0-blue" alt="Version"></a>
+<a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build"></a>
+<a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/coverage-50%25-violet" alt="Coverage"></a>
 </p>
 
 # Monitorly Probe
