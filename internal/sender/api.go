@@ -16,6 +16,7 @@ import (
 	"github.com/monitorly-app/probe/internal/collector"
 	"github.com/monitorly-app/probe/internal/encryption"
 	"github.com/monitorly-app/probe/internal/logger"
+	"github.com/shirou/gopsutil/v4/host"
 )
 
 // APISender implements the Sender interface for API-based metric sending
@@ -35,6 +36,7 @@ type APISender struct {
 type APIPayload struct {
 	MachineName string              `json:"machine_name"`
 	Metrics     []collector.Metrics `json:"metrics"`
+	BootTime    *int64              `json:"boot_time,omitempty"` // Unix timestamp of last boot
 	Encrypted   bool                `json:"encrypted"`
 	Compressed  bool                `json:"compressed"`
 }
@@ -142,10 +144,20 @@ func (s *APISender) Send(metrics []collector.Metrics) error {
 
 // SendWithContext sends metrics to the configured API endpoint with context support
 func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Metrics) error {
+	// Get boot time
+	var bootTime *int64
+	if bootTimeSeconds, err := host.BootTimeWithContext(ctx); err == nil {
+		bootTimeInt64 := int64(bootTimeSeconds)
+		bootTime = &bootTimeInt64
+	} else {
+		logger.Printf("Warning: Failed to get boot time: %v", err)
+	}
+
 	// Create initial payload
 	payload := APIPayload{
 		MachineName: s.machineName,
 		Metrics:     metrics,
+		BootTime:    bootTime,
 		Encrypted:   false,
 		Compressed:  false,
 	}
@@ -171,12 +183,19 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 		}
 
 		// Create a new payload with the encrypted data
-		jsonData, err = json.Marshal(map[string]interface{}{
+		encryptedPayload := map[string]interface{}{
 			"machine_name": s.machineName,
 			"encrypted":    true,
 			"compressed":   false,
 			"data":         encryptedData,
-		})
+		}
+
+		// Include boot time if available
+		if bootTime != nil {
+			encryptedPayload["boot_time"] = *bootTime
+		}
+
+		jsonData, err = json.Marshal(encryptedPayload)
 		if err != nil {
 			return fmt.Errorf("error marshalling encrypted payload: %w", err)
 		}

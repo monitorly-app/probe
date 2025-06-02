@@ -16,6 +16,7 @@ A lightweight server monitoring probe that collects system metrics and sends the
 - Configurable collection intervals for each metric type
 - Flexible disk monitoring with support for multiple mount points
 - Machine identification for multi-server monitoring
+- Boot time tracking for uptime calculation
 - Metrics can be sent to a central API or logged to a local file
 - Auto-reloading when config file changes
 - Smart config file discovery
@@ -352,11 +353,12 @@ When writing to a local file, metrics are stored as individual JSON objects:
 
 ### API Format
 
-When sending to the API, metrics are sent as a single payload with the machine name at the top level:
+When sending to the API, metrics are sent as a single payload with the machine name and boot time at the top level:
 
 ```json
 {
   "machine_name": "web-server-01",
+  "boot_time": 1747863127,
   "metrics": [
     {
       "timestamp": "2023-04-01T12:34:56Z",
@@ -379,6 +381,12 @@ When sending to the API, metrics are sent as a single payload with the machine n
         "available": 391605248000
       }
     }
-  ]
+  ],
+  "encrypted": false,
+  "compressed": false
 }
 ```
+
+#### Boot Time Information
+
+The `boot_time` field contains the Unix timestamp (seconds since epoch) of when the system was last booted. This allows the API to calculate system uptime without requiring the probe to send constantly changing uptime values, which would generate unnecessary database operations. The boot time is automatically detected using system information and included in every API request.
