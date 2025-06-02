@@ -11,7 +11,7 @@ func TestNewCollectors(t *testing.T) {
 	collectors := NewCollectors()
 
 	// Test that the expected collectors are returned
-	expectedCollectors := []string{"cpu", "ram"}
+	expectedCollectors := []string{"cpu", "ram", "user_activity"}
 
 	if len(collectors) != len(expectedCollectors) {
 		t.Errorf("NewCollectors() returned %d collectors, want %d", len(collectors), len(expectedCollectors))
@@ -70,6 +70,25 @@ func TestNewRAMCollector(t *testing.T) {
 		t.Errorf("NewRAMCollector() returned wrong type: %T", c)
 	}
 }
+
+/*
+func TestNewUserActivityCollectorInSystemTest(t *testing.T) {
+	c := NewUserActivityCollector()
+
+	if c == nil {
+		t.Errorf("NewUserActivityCollector() returned nil")
+		return
+	}
+
+	// Test that it implements the Collector interface
+	var _ collector.Collector = c
+
+	// Test that it's the correct type
+	if _, ok := c.(*UserActivityCollector); !ok {
+		t.Errorf("NewUserActivityCollector() returned wrong type: %T", c)
+	}
+}
+*/
 
 func TestNewDiskCollector(t *testing.T) {
 	mountPoints := []config.MountPoint{

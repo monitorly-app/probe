@@ -30,6 +30,10 @@ type Config struct {
 			Interval time.Duration `yaml:"interval"`
 			Services []Service     `yaml:"services"`
 		} `yaml:"service"`
+		UserActivity struct {
+			Enabled  bool          `yaml:"enabled"`
+			Interval time.Duration `yaml:"interval"`
+		} `yaml:"user_activity"`
 	} `yaml:"collection"`
 	Sender struct {
 		Target       string        `yaml:"target"`
@@ -88,6 +92,10 @@ type Collection struct {
 		Interval time.Duration `yaml:"interval"`
 		Services []Service     `yaml:"services"`
 	} `yaml:"service"`
+	UserActivity struct {
+		Enabled  bool          `yaml:"enabled"`
+		Interval time.Duration `yaml:"interval"`
+	} `yaml:"user_activity"`
 }
 
 // GetMachineName returns the configured machine name or the system hostname if not specified
@@ -161,6 +169,12 @@ func applyDefaults(cfg *Config) {
 		}
 	}
 
+	// Set defaults for user activity collection
+	cfg.Collection.UserActivity.Enabled = true
+	if cfg.Collection.UserActivity.Interval == 0 {
+		cfg.Collection.UserActivity.Interval = 1 * time.Minute
+	}
+
 	// Set defaults for sender
 	if cfg.Sender.SendInterval == 0 {
 		cfg.Sender.SendInterval = 5 * time.Minute
@@ -212,6 +226,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Collection.Disk.Enabled && cfg.Collection.Disk.Interval < time.Second {
 		return fmt.Errorf("Disk collection interval must be at least 1 second")
+	}
+	if cfg.Collection.UserActivity.Enabled && cfg.Collection.UserActivity.Interval < time.Second {
+		return fmt.Errorf("User activity collection interval must be at least 1 second")
 	}
 
 	// Validate send interval

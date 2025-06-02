@@ -13,6 +13,7 @@ A lightweight server monitoring probe that collects system metrics and sends the
 ## Features
 
 - Independent metric collection for CPU, RAM, and Disk usage
+- User activity monitoring with active session tracking
 - Configurable collection intervals for each metric type
 - Flexible disk monitoring with support for multiple mount points
 - Machine identification for multi-server monitoring
@@ -261,6 +262,11 @@ collection:
         label: "home"
         collect_percent: true
 
+  # User activity metrics collection settings
+  user_activity:
+    enabled: true           # Enable/disable user activity metrics collection
+    interval: 1m            # Collection interval (every minute by default)
+
 # Sender configuration
 sender:
   target: "log_file"        # Where to send metrics: "api" or "log_file"
@@ -313,6 +319,21 @@ For disk monitoring, you can specify multiple mount points to monitor:
 - `collect_usage`: Whether to collect actual usage in bytes
 - `collect_percent`: Whether to collect usage as a percentage
 
+### User Activity Monitoring
+
+The probe can monitor active user sessions on the system:
+
+- `enabled`: Turn user activity collection on/off
+- `interval`: How frequently to check for active sessions (default: 1 minute)
+
+User activity metrics include:
+- Username of logged-in users
+- Terminal/session type (console, pts/0, etc.)
+- Login IP address (when available)
+- Login time
+
+This feature uses the system's `who` command to gather session information and is useful for security monitoring and user access tracking.
+
 ### Metric Delivery
 
 The `sender` section configures how metrics are delivered:
@@ -348,6 +369,26 @@ When writing to a local file, metrics are stored as individual JSON objects:
     "total": 512000000000,
     "available": 391605248000
   }
+}
+
+{
+  "timestamp": "2023-04-01T12:34:56Z",
+  "category": "system",
+  "name": "user_activity",
+  "value": [
+    {
+      "username": "admin",
+      "terminal": "pts/0",
+      "login_ip": "192.168.1.100",
+      "login_time": "2023-04-01 08:30"
+    },
+    {
+      "username": "user1",
+      "terminal": "console",
+      "login_ip": "",
+      "login_time": "2023-04-01 09:15"
+    }
+  ]
 }
 ```
 

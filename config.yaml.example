@@ -25,6 +25,11 @@ collection:
         label: "home"
         collect_percent: true
 
+  # User activity metrics collection settings
+  user_activity:
+    enabled: true           # Enable/disable user activity metrics collection
+    interval: 1m            # Collection interval (every minute by default)
+
 # Sender configuration
 sender:
   target: "log_file"        # Where to send metrics: "api" or "log_file"

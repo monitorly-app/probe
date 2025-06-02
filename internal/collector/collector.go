@@ -23,6 +23,8 @@ const (
 	NameDisk MetricName = "disk"
 	// NameService is the name for service metrics
 	NameService MetricName = "service"
+	// NameUserActivity is the name for user activity metrics
+	NameUserActivity MetricName = "user_activity"
 )
 
 // MetricMetadata contains additional information about a metric

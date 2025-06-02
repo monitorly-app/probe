@@ -14,6 +14,9 @@ func NewCollectors() map[string]func() collector.Collector {
 		"ram": func() collector.Collector {
 			return NewRAMCollector()
 		},
+		"user_activity": func() collector.Collector {
+			return NewUserActivityCollector()
+		},
 	}
 }
 

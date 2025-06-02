@@ -440,6 +440,16 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 		logger.Printf("Service collector started with interval: %v", cfg.Collection.Service.Interval)
 	}
 
+	if cfg.Collection.UserActivity.Enabled {
+		wg.Add(1)
+		userActivityCollector := system.NewUserActivityCollector()
+		go func() {
+			defer wg.Done()
+			collectRoutine(ctx, "UserActivity", userActivityCollector, metricsChan, cfg.Collection.UserActivity.Interval)
+		}()
+		logger.Printf("User activity collector started with interval: %v", cfg.Collection.UserActivity.Interval)
+	}
+
 	// Start sender routine
 	wg.Add(1)
 	go func() {
