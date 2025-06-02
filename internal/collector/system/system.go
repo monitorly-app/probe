@@ -17,6 +17,9 @@ func NewCollectors() map[string]func() collector.Collector {
 		"user_activity": func() collector.Collector {
 			return NewUserActivityCollector()
 		},
+		"login_failures": func() collector.Collector {
+			return NewLoginFailuresCollector()
+		},
 	}
 }
 

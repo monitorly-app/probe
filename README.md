@@ -14,6 +14,7 @@ A lightweight server monitoring probe that collects system metrics and sends the
 
 - Independent metric collection for CPU, RAM, and Disk usage
 - User activity monitoring with active session tracking
+- Login failure monitoring for security analysis
 - Configurable collection intervals for each metric type
 - Flexible disk monitoring with support for multiple mount points
 - Machine identification for multi-server monitoring
@@ -334,6 +335,26 @@ User activity metrics include:
 
 This feature uses the system's `who` command to gather session information and is useful for security monitoring and user access tracking.
 
+### Login Failure Monitoring
+
+The probe can monitor authentication failures on the system:
+
+- `enabled`: Turn login failure collection on/off
+- `interval`: How frequently to check for login failures (default: 1 minute)
+
+Login failure metrics include:
+- Timestamp of the failed login attempt
+- Username that was attempted
+- Source IP address of the attempt
+- Service that was targeted (SSH, PAM, etc.)
+- Full log message for context
+
+The collector monitors multiple log sources:
+- **systemd journal** (modern systems) via `journalctl`
+- **Traditional syslog files** (`/var/log/auth.log`, `/var/log/secure`)
+
+This feature is essential for security monitoring and intrusion detection, helping identify potential brute-force attacks and unauthorized access attempts.
+
 ### Metric Delivery
 
 The `sender` section configures how metrics are delivered:
@@ -387,6 +408,28 @@ When writing to a local file, metrics are stored as individual JSON objects:
       "terminal": "console",
       "login_ip": "",
       "login_time": "2023-04-01 09:15"
+    }
+  ]
+}
+
+{
+  "timestamp": "2023-04-01T12:34:56Z",
+  "category": "system",
+  "name": "login_failures",
+  "value": [
+    {
+      "timestamp": "2023-04-01T12:30:15Z",
+      "username": "admin",
+      "source_ip": "192.168.1.100",
+      "service": "ssh",
+      "message": "Failed password for admin from 192.168.1.100 port 22 ssh2"
+    },
+    {
+      "timestamp": "2023-04-01T12:31:22Z",
+      "username": "root",
+      "source_ip": "10.0.0.50",
+      "service": "ssh",
+      "message": "Invalid user root from 10.0.0.50 port 22"
     }
   ]
 }

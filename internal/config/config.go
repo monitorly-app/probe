@@ -34,6 +34,10 @@ type Config struct {
 			Enabled  bool          `yaml:"enabled"`
 			Interval time.Duration `yaml:"interval"`
 		} `yaml:"user_activity"`
+		LoginFailures struct {
+			Enabled  bool          `yaml:"enabled"`
+			Interval time.Duration `yaml:"interval"`
+		} `yaml:"login_failures"`
 	} `yaml:"collection"`
 	Sender struct {
 		Target       string        `yaml:"target"`
@@ -96,6 +100,10 @@ type Collection struct {
 		Enabled  bool          `yaml:"enabled"`
 		Interval time.Duration `yaml:"interval"`
 	} `yaml:"user_activity"`
+	LoginFailures struct {
+		Enabled  bool          `yaml:"enabled"`
+		Interval time.Duration `yaml:"interval"`
+	} `yaml:"login_failures"`
 }
 
 // GetMachineName returns the configured machine name or the system hostname if not specified
@@ -175,6 +183,12 @@ func applyDefaults(cfg *Config) {
 		cfg.Collection.UserActivity.Interval = 1 * time.Minute
 	}
 
+	// Set defaults for login failures collection
+	cfg.Collection.LoginFailures.Enabled = true
+	if cfg.Collection.LoginFailures.Interval == 0 {
+		cfg.Collection.LoginFailures.Interval = 1 * time.Minute
+	}
+
 	// Set defaults for sender
 	if cfg.Sender.SendInterval == 0 {
 		cfg.Sender.SendInterval = 5 * time.Minute
@@ -229,6 +243,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Collection.UserActivity.Enabled && cfg.Collection.UserActivity.Interval < time.Second {
 		return fmt.Errorf("User activity collection interval must be at least 1 second")
+	}
+	if cfg.Collection.LoginFailures.Enabled && cfg.Collection.LoginFailures.Interval < time.Second {
+		return fmt.Errorf("Login failures collection interval must be at least 1 second")
 	}
 
 	// Validate send interval

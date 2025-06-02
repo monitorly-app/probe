@@ -450,6 +450,16 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 		logger.Printf("User activity collector started with interval: %v", cfg.Collection.UserActivity.Interval)
 	}
 
+	if cfg.Collection.LoginFailures.Enabled {
+		wg.Add(1)
+		loginFailuresCollector := system.NewLoginFailuresCollector()
+		go func() {
+			defer wg.Done()
+			collectRoutine(ctx, "LoginFailures", loginFailuresCollector, metricsChan, cfg.Collection.LoginFailures.Interval)
+		}()
+		logger.Printf("Login failures collector started with interval: %v", cfg.Collection.LoginFailures.Interval)
+	}
+
 	// Start sender routine
 	wg.Add(1)
 	go func() {

@@ -30,6 +30,11 @@ collection:
     enabled: true           # Enable/disable user activity metrics collection
     interval: 1m            # Collection interval (every minute by default)
 
+  # Login failures metrics collection settings
+  login_failures:
+    enabled: true           # Enable/disable login failures metrics collection
+    interval: 1m            # Collection interval (every minute by default)
+
 # Sender configuration
 sender:
   target: "log_file"        # Where to send metrics: "api" or "log_file"

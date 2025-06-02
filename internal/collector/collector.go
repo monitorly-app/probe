@@ -25,6 +25,8 @@ const (
 	NameService MetricName = "service"
 	// NameUserActivity is the name for user activity metrics
 	NameUserActivity MetricName = "user_activity"
+	// NameLoginFailures is the name for login failure metrics
+	NameLoginFailures MetricName = "login_failures"
 )
 
 // MetricMetadata contains additional information about a metric
