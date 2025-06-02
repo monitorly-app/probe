@@ -460,6 +460,16 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 		logger.Printf("Login failures collector started with interval: %v", cfg.Collection.LoginFailures.Interval)
 	}
 
+	if cfg.Collection.Port.Enabled {
+		wg.Add(1)
+		portCollector := system.NewPortCollector()
+		go func() {
+			defer wg.Done()
+			collectRoutine(ctx, "Port", portCollector, metricsChan, cfg.Collection.Port.Interval)
+		}()
+		logger.Printf("Port monitoring collector started with interval: %v", cfg.Collection.Port.Interval)
+	}
+
 	// Start sender routine
 	wg.Add(1)
 	go func() {

@@ -38,6 +38,10 @@ type Config struct {
 			Enabled  bool          `yaml:"enabled"`
 			Interval time.Duration `yaml:"interval"`
 		} `yaml:"login_failures"`
+		Port struct {
+			Enabled  bool          `yaml:"enabled"`
+			Interval time.Duration `yaml:"interval"`
+		} `yaml:"port"`
 	} `yaml:"collection"`
 	Sender struct {
 		Target       string        `yaml:"target"`
@@ -104,6 +108,10 @@ type Collection struct {
 		Enabled  bool          `yaml:"enabled"`
 		Interval time.Duration `yaml:"interval"`
 	} `yaml:"login_failures"`
+	Port struct {
+		Enabled  bool          `yaml:"enabled"`
+		Interval time.Duration `yaml:"interval"`
+	} `yaml:"port"`
 }
 
 // GetMachineName returns the configured machine name or the system hostname if not specified
@@ -189,6 +197,12 @@ func applyDefaults(cfg *Config) {
 		cfg.Collection.LoginFailures.Interval = 1 * time.Minute
 	}
 
+	// Set defaults for port monitoring collection
+	cfg.Collection.Port.Enabled = true
+	if cfg.Collection.Port.Interval == 0 {
+		cfg.Collection.Port.Interval = 1 * time.Minute
+	}
+
 	// Set defaults for sender
 	if cfg.Sender.SendInterval == 0 {
 		cfg.Sender.SendInterval = 5 * time.Minute
@@ -246,6 +260,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Collection.LoginFailures.Enabled && cfg.Collection.LoginFailures.Interval < time.Second {
 		return fmt.Errorf("Login failures collection interval must be at least 1 second")
+	}
+	if cfg.Collection.Port.Enabled && cfg.Collection.Port.Interval < time.Second {
+		return fmt.Errorf("Port monitoring collection interval must be at least 1 second")
 	}
 
 	// Validate send interval

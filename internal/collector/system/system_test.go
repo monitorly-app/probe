@@ -11,7 +11,7 @@ func TestNewCollectors(t *testing.T) {
 	collectors := NewCollectors()
 
 	// Test that the expected collectors are returned
-	expectedCollectors := []string{"cpu", "ram", "user_activity", "login_failures"}
+	expectedCollectors := []string{"cpu", "ram", "user_activity", "login_failures", "port"}
 
 	if len(collectors) != len(expectedCollectors) {
 		t.Errorf("NewCollectors() returned %d collectors, want %d", len(collectors), len(expectedCollectors))

@@ -1,5 +1,5 @@
 # Optional custom machine name (defaults to system hostname if not specified)
-# machine_name: "web-server-01"
+machine_name: "web-server-01"
 
 collection:
   # CPU metrics collection settings
@@ -35,6 +35,21 @@ collection:
     enabled: true           # Enable/disable login failures metrics collection
     interval: 1m            # Collection interval (every minute by default)
 
+  # Service metrics collection settings
+  service:
+    enabled: true           # Enable/disable service metrics collection
+    interval: 30s           # Collection interval
+    services:
+      - name: "nginx"       # Name of the service
+        label: "web server"  # User-friendly label for the service
+      - name: "postgresql"  # Name of the service
+        label: "database"   # User-friendly label for the service
+
+  # Port metrics collection settings
+  port:
+    enabled: true           # Enable/disable port metrics collection
+    interval: 1m            # Monitor open TCP/UDP ports and their processes
+
 # Sender configuration
 sender:
   target: "log_file"        # Where to send metrics: "api" or "log_file"
@@ -55,3 +70,9 @@ log_file:
 # Application logging configuration
 logging:
   file_path: "logs/monitorly.log"  # Path for application logs
+
+# Update check configuration
+updates:
+  enabled: true                # Enable/disable automatic update checks
+  check_time: "00:00"         # Time of day to check for updates (HH:MM format, default: midnight)
+  retry_delay: 1h             # How long to wait before retrying after a failed update

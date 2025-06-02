@@ -20,6 +20,9 @@ func NewCollectors() map[string]func() collector.Collector {
 		"login_failures": func() collector.Collector {
 			return NewLoginFailuresCollector()
 		},
+		"port": func() collector.Collector {
+			return NewPortCollector()
+		},
 	}
 }
 

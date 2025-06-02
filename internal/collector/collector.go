@@ -27,6 +27,8 @@ const (
 	NameUserActivity MetricName = "user_activity"
 	// NameLoginFailures is the name for login failure metrics
 	NameLoginFailures MetricName = "login_failures"
+	// NamePort is the name for port monitoring metrics
+	NamePort MetricName = "port"
 )
 
 // MetricMetadata contains additional information about a metric

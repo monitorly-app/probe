@@ -15,6 +15,7 @@ A lightweight server monitoring probe that collects system metrics and sends the
 - Independent metric collection for CPU, RAM, and Disk usage
 - User activity monitoring with active session tracking
 - Login failure monitoring for security analysis
+- Port monitoring with open TCP/UDP ports and associated processes
 - Configurable collection intervals for each metric type
 - Flexible disk monitoring with support for multiple mount points
 - Machine identification for multi-server monitoring
@@ -355,6 +356,28 @@ The collector monitors multiple log sources:
 
 This feature is essential for security monitoring and intrusion detection, helping identify potential brute-force attacks and unauthorized access attempts.
 
+### Port Monitoring
+
+The probe can monitor open network ports and their associated processes:
+
+- `enabled`: Turn port monitoring on/off
+- `interval`: How frequently to scan for open ports (default: 1 minute)
+
+Port monitoring metrics include:
+- **Protocol**: TCP or UDP
+- **Local address and port**: Where the service is listening
+- **Remote address and port**: For established connections
+- **Connection status**: LISTEN, ESTABLISHED, etc.
+- **Process information**: PID and process name listening on the port
+
+The collector uses the `gopsutil` library to gather network connection information from the system, providing insights into:
+- Which services are running and listening
+- Active network connections
+- Process-to-port mappings for security auditing
+- Network service discovery
+
+This feature is valuable for security monitoring, service discovery, and ensuring only authorized services are running on expected ports.
+
 ### Metric Delivery
 
 The `sender` section configures how metrics are delivered:
@@ -430,6 +453,44 @@ When writing to a local file, metrics are stored as individual JSON objects:
       "source_ip": "10.0.0.50",
       "service": "ssh",
       "message": "Invalid user root from 10.0.0.50 port 22"
+    }
+  ]
+}
+
+{
+  "timestamp": "2023-04-01T12:34:56Z",
+  "category": "system",
+  "name": "port",
+  "value": [
+    {
+      "protocol": "tcp",
+      "local_addr": "0.0.0.0",
+      "local_port": 22,
+      "remote_addr": "",
+      "remote_port": 0,
+      "status": "LISTEN",
+      "process_id": 1234,
+      "process_name": "sshd"
+    },
+    {
+      "protocol": "tcp",
+      "local_addr": "127.0.0.1",
+      "local_port": 3306,
+      "remote_addr": "",
+      "remote_port": 0,
+      "status": "LISTEN",
+      "process_id": 5678,
+      "process_name": "mysqld"
+    },
+    {
+      "protocol": "tcp",
+      "local_addr": "192.168.1.100",
+      "local_port": 22,
+      "remote_addr": "192.168.1.50",
+      "remote_port": 54321,
+      "status": "ESTABLISHED",
+      "process_id": 1234,
+      "process_name": "sshd"
     }
   ]
 }
