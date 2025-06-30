@@ -451,7 +451,7 @@ func TestAPISender_SendWithContext(t *testing.T) {
 				// Provide a new body for future reads
 				r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-				if tt.responses != nil && len(tt.responses) > 0 {
+				if len(tt.responses) > 0 {
 					w.WriteHeader(tt.responses[responseIndex])
 					if responseIndex < len(tt.responses)-1 {
 						responseIndex++
