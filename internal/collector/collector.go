@@ -29,6 +29,8 @@ const (
 	NameLoginFailures MetricName = "login_failures"
 	// NamePort is the name for port monitoring metrics
 	NamePort MetricName = "port"
+	// NameSystemInfo is the name for system information metrics
+	NameSystemInfo MetricName = "system_info"
 )
 
 // MetricMetadata contains additional information about a metric

@@ -278,7 +278,8 @@ func TestRunMainLoop(t *testing.T) {
 	configContent := `
 api:
   url: "https://api.example.com"
-  project_id: "test-project"
+  organization_id: "test-org"
+  server_id: "test-server"
   application_token: "test-token"
 machine_name: "test-machine"
 sender:
@@ -355,7 +356,8 @@ func TestRunApplication(t *testing.T) {
 	configContent := `
 api:
   url: "https://api.example.com"
-  project_id: "test-project"
+  organization_id: "test-org"
+  server_id: "test-server"
   application_token: "test-token"
 machine_name: "test-machine"
 sender:
@@ -587,7 +589,8 @@ func TestFindConfigFile(t *testing.T) {
 	testConfigContent := `
 api:
   url: "https://api.example.com"
-  project_id: "test-project"
+  organization_id: "test-org"
+  server_id: "test-server"
   application_token: "test-token"
 machine_name: "test-machine"
 sender:
@@ -677,7 +680,8 @@ func TestLoadConfig(t *testing.T) {
 			configData: `
 api:
   url: "https://api.example.com"
-  project_id: "test-project"
+  organization_id: "test-org"
+  server_id: "test-server"
   application_token: "test-token"
 machine_name: "test-machine"
 sender:
@@ -692,7 +696,9 @@ log_file:
 			configData: `
 api:
   url: "https://api.example.com"
-  project_id: "test-project"
+  organization_id: "test-org"
+  server_id: "test-server"
+  application_token: "test-token"
   invalid: [unclosed
 `,
 			wantErr:     true,
@@ -949,7 +955,8 @@ func TestWatchConfigFile(t *testing.T) {
 	initialConfig := `
 api:
   url: "https://api.example.com"
-  project_id: "test-project"
+  organization_id: "test-org"
+  server_id: "test-server"
   application_token: "test-token"
 machine_name: "test-machine"
 sender:
@@ -989,7 +996,8 @@ log_file:
 	modifiedConfig := `
 api:
   url: "https://api.modified.com"
-  project_id: "test-project"
+  organization_id: "test-org"
+  server_id: "test-server"
   application_token: "test-token"
 machine_name: "test-machine"
 sender:
@@ -1022,7 +1030,8 @@ func TestRunApp(t *testing.T) {
 
 	// Set API config
 	cfg.API.URL = "https://api.example.com"
-	cfg.API.ProjectID = "test-project"
+	cfg.API.OrganizationID = "test-org"
+	cfg.API.ServerID = "test-server"
 	cfg.API.ApplicationToken = "test-token"
 
 	// Set sender config

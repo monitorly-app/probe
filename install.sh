@@ -311,9 +311,10 @@ sender:
 
 # API configuration (required if sender.target is "api")
 api:
-  url: "https://api.monitorly.app/metrics"
-  project_id: "YOUR_PROJECT_ID"
-  application_token: "YOUR_APP_TOKEN"
+  url: "https://api.monitorly.io"
+  organization_id: "YOUR_ORGANIZATION_ID"
+  server_id: "YOUR_SERVER_ID"
+  application_token: "YOUR_APPLICATION_TOKEN"
 
 # Log file configuration (used if sender.target is "log_file")
 log_file:
@@ -535,7 +536,7 @@ show_instructions() {
   echo
   echo -e "Specifically, if you want to send metrics to the Monitorly API, edit these settings:"
   echo -e "  1. Change ${BLUE}sender.target${NC} to ${BLUE}\"api\"${NC}"
-  echo -e "  2. Set your ${BLUE}api.project_id${NC} and ${BLUE}api.application_token${NC}"
+  echo -e "  2. Set your ${BLUE}api.organization_id${NC} and ${BLUE}api.application_token${NC}"
   echo
 
   # Display service-specific instructions

@@ -20,13 +20,14 @@ func TestLoad(t *testing.T) {
 			name: "valid minimal config",
 			configYAML: `
 api:
-  url: "https://api.monitorly.com"
-  project_id: "123e4567-e89b-12d3-a456-426614174000"
-  application_token: "secret-token"
+  url: "https://api.monitorly.io"
+  organization_id: "123e4567-e89b-12d3-a456-426614174000"
+  server_id: "123e4567-e89b-12d3-a456-426614174001"
+  application_token: "test-token"
 `,
 			validate: func(t *testing.T, cfg *Config) {
-				if cfg.API.URL != "https://api.monitorly.com" {
-					t.Errorf("expected API URL %q, got %q", "https://api.monitorly.com", cfg.API.URL)
+				if cfg.API.URL != "https://api.monitorly.io" {
+					t.Errorf("expected API URL %q, got %q", "https://api.monitorly.io", cfg.API.URL)
 				}
 				// Check defaults were applied
 				if !cfg.Collection.CPU.Enabled {
@@ -64,9 +65,10 @@ sender:
   target: "api"
   send_interval: 1m
 api:
-  url: "https://api.monitorly.com"
-  project_id: "123e4567-e89b-12d3-a456-426614174000"
-  application_token: "secret-token"
+  url: "https://api.monitorly.io"
+  organization_id: "123e4567-e89b-12d3-a456-426614174000"
+  server_id: "123e4567-e89b-12d3-a456-426614174001"
+  application_token: "test-token"
   encryption_key: "12345678901234567890123456789012"
 log_file:
   path: "/var/log/monitorly/metrics.log"
@@ -117,8 +119,9 @@ api:
 			name: "invalid encryption key length",
 			configYAML: `
 api:
-  url: "https://api.monitorly.com"
-  project_id: "123"
+  url: "https://api.monitorly.io"
+  organization_id: "123"
+  server_id: "123e4567-e89b-12d3-a456-426614174000"
   application_token: "token"
   encryption_key: "too-short"
 `,
@@ -129,8 +132,9 @@ api:
 			name: "invalid collection intervals",
 			configYAML: `
 api:
-  url: "https://api.monitorly.com"
-  project_id: "123"
+  url: "https://api.monitorly.io"
+  organization_id: "123"
+  server_id: "123e4567-e89b-12d3-a456-426614174000"
   application_token: "token"
 collection:
   cpu:
@@ -144,8 +148,9 @@ collection:
 			name: "invalid mount point config",
 			configYAML: `
 api:
-  url: "https://api.monitorly.com"
-  project_id: "123"
+  url: "https://api.monitorly.io"
+  organization_id: "123"
+  server_id: "123e4567-e89b-12d3-a456-426614174000"
   application_token: "token"
 collection:
   disk:
@@ -161,8 +166,9 @@ collection:
 			name: "invalid sender target",
 			configYAML: `
 api:
-  url: "https://api.monitorly.com"
-  project_id: "123"
+  url: "https://api.monitorly.io"
+  organization_id: "123"
+  server_id: "123e4567-e89b-12d3-a456-426614174000"
   application_token: "token"
 sender:
   target: "invalid"

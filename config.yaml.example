@@ -1,78 +1,97 @@
-# Optional custom machine name (defaults to system hostname if not specified)
-machine_name: "web-server-01"
+# Example configuration file for the Monitorly probe
+# Copy this file to config.yaml and adjust the values according to your needs
 
+# Optional: Machine name to differentiate metrics from different servers
+# If not specified, the system hostname will be used
+machine_name: ""
+
+# Collection configuration
 collection:
-  # CPU metrics collection settings
+  # CPU metrics collection
   cpu:
-    enabled: true           # Enable/disable CPU metrics collection
-    interval: 5s            # Collection interval (e.g., 5s, 1m, 1h)
+    enabled: true
+    interval: 30s
 
-  # RAM metrics collection settings
+  # RAM metrics collection
   ram:
-    enabled: true           # Enable/disable RAM metrics collection
-    interval: 10s           # Collection interval
+    enabled: true
+    interval: 30s
 
-  # Disk metrics collection settings
+  # Disk metrics collection
   disk:
-    enabled: true           # Enable/disable disk metrics collection
-    interval: 30s           # Collection interval
-    mount_points:           # List of mount points to monitor
-      - path: "/"           # Path to the mount point
-        label: "root"       # User-friendly label for the mount point
-        collect_usage: true  # Collect disk usage in bytes
-        collect_percent: true # Collect disk usage as percentage
+    enabled: true
+    interval: 60s
+    mount_points:
+      - path: "/"
+        label: "root"
+        collect_usage: true
+        collect_percent: true
       - path: "/home"
         label: "home"
+        collect_usage: true
         collect_percent: true
 
-  # User activity metrics collection settings
-  user_activity:
-    enabled: true           # Enable/disable user activity metrics collection
-    interval: 1m            # Collection interval (every minute by default)
-
-  # Login failures metrics collection settings
-  login_failures:
-    enabled: true           # Enable/disable login failures metrics collection
-    interval: 1m            # Collection interval (every minute by default)
-
-  # Service metrics collection settings
+  # Service monitoring
   service:
-    enabled: true           # Enable/disable service metrics collection
-    interval: 30s           # Collection interval
+    enabled: true
+    interval: 60s
     services:
-      - name: "nginx"       # Name of the service
-        label: "web server"  # User-friendly label for the service
-      - name: "postgresql"  # Name of the service
-        label: "database"   # User-friendly label for the service
+      - name: "nginx"
+        label: "Nginx Web Server"
+      - name: "postgresql"
+        label: "PostgreSQL Database"
 
-  # Port metrics collection settings
+  # User activity monitoring
+  user_activity:
+    enabled: true
+    interval: 60s
+
+  # Login failures monitoring
+  login_failures:
+    enabled: true
+    interval: 60s
+
+  # Port monitoring
   port:
-    enabled: true           # Enable/disable port metrics collection
-    interval: 1m            # Monitor open TCP/UDP ports and their processes
+    enabled: true
+    interval: 60s
 
 # Sender configuration
 sender:
-  target: "log_file"        # Where to send metrics: "api" or "log_file"
-  send_interval: 30s        # How often to send collected metrics
+  # Target can be either "api" or "log_file"
+  target: "api"
+  # How often to send collected metrics
+  send_interval: 5m
 
 # API configuration (required if sender.target is "api")
 api:
-  url: "https://api.example.com/metrics"  # API endpoint
-  project_id: "00000000-0000-0000-0000-000000000000"  # Project ID (UUID)
-  application_token: "your-application-token"         # Application token for authentication
-  # Optional: If set, encrypts the request body. Must be exactly 32 bytes long. Requires premium subscription.
+  # API endpoint URL
+  url: "https://api.monitorly.io"
+  # Your organization ID (UUID)
+  organization_id: ""
+  # Your server ID (UUID)
+  server_id: ""
+  # Your application token for authentication
+  application_token: ""
+  # Optional: Encryption key for request body (requires premium subscription)
+  # Must be exactly 32 bytes long if specified
   encryption_key: ""
 
-# Log file configuration (used if sender.target is "log_file")
+# Log file configuration (required if sender.target is "log_file")
 log_file:
-  path: "logs/metrics.log"  # Path where metrics will be logged
+  # Path to the metrics log file
+  path: "logs/metrics.log"
 
 # Application logging configuration
 logging:
-  file_path: "logs/monitorly.log"  # Path for application logs
+  # Path to the application log file
+  file_path: "logs/monitorly.log"
 
-# Update check configuration
+# Update configuration
 updates:
-  enabled: true                # Enable/disable automatic update checks
-  check_time: "00:00"         # Time of day to check for updates (HH:MM format, default: midnight)
-  retry_delay: 1h             # How long to wait before retrying after a failed update
+  # Whether to enable automatic updates
+  enabled: true
+  # Time of day to check for updates (HH:MM format)
+  check_time: "03:00"
+  # How long to wait before retrying after a failed update
+  retry_delay: 1h

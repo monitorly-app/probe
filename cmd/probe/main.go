@@ -370,9 +370,6 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 	}
 	logger.Printf("Using machine name: %s", machineName)
 
-	// Channel for collected metrics
-	metricsChan := make(chan []collector.Metrics, 100)
-
 	// Initialize sender based on configuration
 	var metricSender sender.Sender
 
@@ -380,12 +377,13 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 	case "api":
 		metricSender = sender.NewAPISender(
 			cfg.API.URL,
-			cfg.API.ProjectID,
+			cfg.API.OrganizationID,
+			cfg.API.ServerID,
 			cfg.API.ApplicationToken,
 			machineName,
 			cfg.API.EncryptionKey,
 		)
-		logger.Printf("Metrics will be sent to API: %s for project: %s", cfg.API.URL, cfg.API.ProjectID)
+		logger.Printf("Metrics will be sent to API: %s for organization: %s", cfg.API.URL, cfg.API.OrganizationID)
 		if cfg.API.EncryptionKey != "" {
 			logger.Printf("Encryption enabled for API communication")
 		}
@@ -395,6 +393,22 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 	default:
 		logger.Fatalf("Unknown sender target: %s", cfg.Sender.Target)
 	}
+
+	// Send initial system information
+	systemInfoCollector := system.NewSystemInfoCollector()
+	systemInfo, err := systemInfoCollector.Collect()
+	if err != nil {
+		logger.Printf("Warning: Failed to collect system information: %v", err)
+	} else {
+		if err := metricSender.Send(systemInfo); err != nil {
+			logger.Printf("Warning: Failed to send system information: %v", err)
+		} else {
+			logger.Printf("Initial system information sent successfully")
+		}
+	}
+
+	// Channel for collected metrics
+	metricsChan := make(chan []collector.Metrics, 100)
 
 	// Use WaitGroup to track goroutines
 	var wg sync.WaitGroup

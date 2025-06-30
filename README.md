@@ -276,9 +276,10 @@ sender:
 
 # API configuration (required if sender.target is "api")
 api:
-  url: "https://api.example.com/metrics"              # API endpoint
-  project_id: "00000000-0000-0000-0000-000000000000"  # Project ID (UUID) to identify your project
-  application_token: "your-application-token"         # Application token for authentication
+  url: "https://api.monitorly.io"
+  organization_id: "00000000-0000-0000-0000-000000000000"  # Organization ID (UUID) to identify your organization
+  server_id: "00000000-0000-0000-0000-000000000000"  # Server ID (UUID) to identify this server
+  application_token: "your-application-token"  # Authentication token
 
 # Log file configuration (used if sender.target is "log_file")
 log_file:
@@ -302,8 +303,10 @@ The `machine_name` setting allows you to specify a custom identifier for the ser
 
 When sending metrics to the API, the following fields are used:
 
-- `project_id`: UUID that identifies your project within the Monitorly system (included in the URL)
-- `application_token`: Authentication token used as Bearer token in API requests
+- `organization_id`: UUID that identifies your organization within the Monitorly system (included in the URL)
+- `server_id`: UUID that identifies this server within your organization
+- `application_token`: Authentication token for API access
+- `encryption_key`: Optional encryption key for request body (requires premium subscription)
 
 ### Metric Collection
 

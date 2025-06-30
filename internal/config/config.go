@@ -49,7 +49,8 @@ type Config struct {
 	} `yaml:"sender"`
 	API struct {
 		URL              string `yaml:"url"`
-		ProjectID        string `yaml:"project_id"`        // Project ID (UUID) for API requests
+		OrganizationID   string `yaml:"organization_id"`   // Organization ID (UUID) for API requests
+		ServerID         string `yaml:"server_id"`         // Server ID (UUID) for API requests
 		ApplicationToken string `yaml:"application_token"` // Application token for API authentication
 		EncryptionKey    string `yaml:"encryption_key"`    // Optional: If set, encrypts the request body. Requires premium subscription.
 	} `yaml:"api"`
@@ -228,8 +229,11 @@ func validate(cfg *Config) error {
 		if cfg.API.URL == "" {
 			return fmt.Errorf("API URL is required when sender target is set to 'api'")
 		}
-		if cfg.API.ProjectID == "" {
-			return fmt.Errorf("project ID is required when sender target is set to 'api'")
+		if cfg.API.OrganizationID == "" {
+			return fmt.Errorf("organization ID is required when sender target is set to 'api'")
+		}
+		if cfg.API.ServerID == "" {
+			return fmt.Errorf("server ID is required when sender target is set to 'api'")
 		}
 		if cfg.API.ApplicationToken == "" {
 			return fmt.Errorf("application token is required when sender target is set to 'api'")
@@ -268,20 +272,6 @@ func validate(cfg *Config) error {
 	// Validate send interval
 	if cfg.Sender.SendInterval < time.Second {
 		return fmt.Errorf("send interval must be at least 1 second")
-	}
-
-	// Validate disk mount points
-	for i, mp := range cfg.Collection.Disk.MountPoints {
-		if mp.Path == "" {
-			return fmt.Errorf("mount point #%d is missing a path", i+1)
-		}
-		if mp.Label == "" {
-			return fmt.Errorf("mount point #%d is missing a label", i+1)
-		}
-		// Ensure at least one collection method is enabled
-		if !mp.CollectUsage && !mp.CollectPercent {
-			return fmt.Errorf("mount point %s must have at least one collection method enabled", mp.Path)
-		}
 	}
 
 	return nil
