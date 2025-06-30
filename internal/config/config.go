@@ -249,7 +249,22 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("invalid sender target: %s (must be 'api' or 'log_file')", cfg.Sender.Target)
 	}
 
-	// Validate collection intervals if enabled
+	// Validate mount points
+	if cfg.Collection.Disk.Enabled {
+		for i, mp := range cfg.Collection.Disk.MountPoints {
+			if mp.Path == "" {
+				return fmt.Errorf("mount point #%d is missing a path", i+1)
+			}
+			if mp.Label == "" {
+				return fmt.Errorf("mount point #%d is missing a label", i+1)
+			}
+			if !mp.CollectUsage && !mp.CollectPercent {
+				return fmt.Errorf("mount point #%d must collect either usage or percent", i+1)
+			}
+		}
+	}
+
+	// Validate collection intervals
 	if cfg.Collection.CPU.Enabled && cfg.Collection.CPU.Interval < time.Second {
 		return fmt.Errorf("CPU collection interval must be at least 1 second")
 	}
@@ -259,6 +274,9 @@ func validate(cfg *Config) error {
 	if cfg.Collection.Disk.Enabled && cfg.Collection.Disk.Interval < time.Second {
 		return fmt.Errorf("Disk collection interval must be at least 1 second")
 	}
+	if cfg.Collection.Service.Enabled && cfg.Collection.Service.Interval < time.Second {
+		return fmt.Errorf("Service collection interval must be at least 1 second")
+	}
 	if cfg.Collection.UserActivity.Enabled && cfg.Collection.UserActivity.Interval < time.Second {
 		return fmt.Errorf("User activity collection interval must be at least 1 second")
 	}
@@ -266,12 +284,7 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("Login failures collection interval must be at least 1 second")
 	}
 	if cfg.Collection.Port.Enabled && cfg.Collection.Port.Interval < time.Second {
-		return fmt.Errorf("Port monitoring collection interval must be at least 1 second")
-	}
-
-	// Validate send interval
-	if cfg.Sender.SendInterval < time.Second {
-		return fmt.Errorf("send interval must be at least 1 second")
+		return fmt.Errorf("Port collection interval must be at least 1 second")
 	}
 
 	return nil

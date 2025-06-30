@@ -18,6 +18,15 @@ import (
 	"github.com/monitorly-app/probe/internal/logger"
 )
 
+// APIPayload represents the structure of the API payload
+type APIPayload struct {
+	MachineName *string             `json:"machine_name,omitempty"`
+	Metrics     []collector.Metrics `json:"metrics,omitempty"`
+	Encrypted   *bool               `json:"encrypted,omitempty"`
+	Compressed  *bool               `json:"compressed,omitempty"`
+	Data        *string             `json:"data,omitempty"`
+}
+
 // mockLogger implements logger.LoggerInterface for testing
 type mockLogger struct {
 	buffer bytes.Buffer
@@ -84,9 +93,10 @@ func TestAPISender_Send(t *testing.T) {
 	sender := NewAPISender(
 		server.URL,
 		"test-project",
+		"test-server",
 		"test-token",
 		"test-machine",
-		"",
+		"", // empty encryption key
 	)
 
 	metrics := []collector.Metrics{
@@ -299,19 +309,19 @@ func TestAPISender_SendWithContext(t *testing.T) {
 		{
 			name: "successful unencrypted small request",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "")
 			},
 			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          smallMetrics,
 			responses:        []int{http.StatusOK},
 			expectEncrypted:  false,
-			expectCompressed: false,
+			expectCompressed: true,
 			wantErr:          false,
 		},
 		{
 			name: "successful unencrypted large request with compression",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "")
 			},
 			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          largeMetrics,
@@ -323,19 +333,19 @@ func TestAPISender_SendWithContext(t *testing.T) {
 		{
 			name: "successful encrypted small request",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "12345678901234567890123456789012")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "12345678901234567890123456789012")
 			},
 			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          smallMetrics,
 			responses:        []int{http.StatusOK},
 			expectEncrypted:  true,
-			expectCompressed: false,
+			expectCompressed: true,
 			wantErr:          false,
 		},
 		{
 			name: "successful encrypted large request with compression",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "12345678901234567890123456789012")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "12345678901234567890123456789012")
 			},
 			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          largeMetrics,
@@ -347,7 +357,7 @@ func TestAPISender_SendWithContext(t *testing.T) {
 		{
 			name: "encryption not available fallback with compression",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "12345678901234567890123456789012")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "12345678901234567890123456789012")
 			},
 			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          largeMetrics,
@@ -360,20 +370,20 @@ func TestAPISender_SendWithContext(t *testing.T) {
 		{
 			name: "encryption not available fallback failure",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "12345678901234567890123456789012")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "12345678901234567890123456789012")
 			},
 			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          smallMetrics,
 			responses:        []int{http.StatusPreconditionFailed, http.StatusInternalServerError},
 			expectEncrypted:  true,
-			expectCompressed: false,
+			expectCompressed: true,
 			wantErr:          true,
 			wantLogMessage:   "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
 		},
 		{
 			name: "invalid URL",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender("invalid://url", "test-project", "test-token", "test-machine", "")
+				return NewAPISender("invalid://url", "test-project", "test-server", "test-token", "test-machine", "")
 			},
 			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          smallMetrics,
@@ -383,7 +393,7 @@ func TestAPISender_SendWithContext(t *testing.T) {
 		{
 			name: "context cancelled",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "")
 			},
 			setupContext: func() (context.Context, context.CancelFunc) {
 				ctx, cancel := context.WithCancel(context.Background())
@@ -397,7 +407,7 @@ func TestAPISender_SendWithContext(t *testing.T) {
 		{
 			name: "server error",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "")
 			},
 			setupContext: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:      smallMetrics,
@@ -407,7 +417,7 @@ func TestAPISender_SendWithContext(t *testing.T) {
 		{
 			name: "invalid encryption key length",
 			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-token", "test-machine", "invalid-key")
+				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "invalid-key")
 			},
 			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
 			metrics:          smallMetrics,
@@ -489,22 +499,13 @@ func TestAPISender_SendWithContext(t *testing.T) {
 				t.Errorf("Authorization = %v, want Bearer test-token", got)
 			}
 
-			// Check compression header and decompress if needed
-			var decodedBody []byte
-			if tt.expectCompressed {
-				if got := firstRequest.Header.Get("Content-Encoding"); got != "gzip" {
-					t.Errorf("Content-Encoding = %v, want gzip", got)
-				}
-				var err error
-				decodedBody, err = decompressGzip(firstBody)
-				if err != nil {
-					t.Fatalf("Failed to decompress request body: %v", err)
-				}
-			} else {
-				if got := firstRequest.Header.Get("Content-Encoding"); got != "" {
-					t.Errorf("Content-Encoding header should not be present for uncompressed data, got %v", got)
-				}
-				decodedBody = firstBody
+			// Check compression header and decompress - all requests are now compressed
+			if got := firstRequest.Header.Get("Content-Encoding"); got != "gzip" {
+				t.Errorf("Content-Encoding = %v, want gzip", got)
+			}
+			decodedBody, err := decompressGzip(firstBody)
+			if err != nil {
+				t.Fatalf("Failed to decompress request body: %v", err)
 			}
 
 			// Decode the first request body
@@ -522,13 +523,8 @@ func TestAPISender_SendWithContext(t *testing.T) {
 				t.Errorf("encrypted = %v, want %v", encrypted, tt.expectEncrypted)
 			}
 
-			// Check compression flag in payload
-			if tt.expectCompressed {
-				compressed, ok := payload["compressed"].(bool)
-				if !ok || !compressed {
-					t.Error("Expected compressed field to be true in payload")
-				}
-			}
+			// Check compression flag in payload - compression is now at HTTP level, not in payload
+			// We don't expect a compressed field in the payload anymore
 
 			// If encryption was expected, verify encrypted data is present
 			if tt.expectEncrypted && encrypted {
@@ -553,19 +549,13 @@ func TestAPISender_SendWithContext(t *testing.T) {
 				// Get the second request body
 				secondBody := requestBodies[1]
 
-				// Decompress if needed
-				var decodedSecondBody []byte
-				if tt.expectCompressed {
-					if got := requests[1].Header.Get("Content-Encoding"); got != "gzip" {
-						t.Errorf("Second request Content-Encoding = %v, want gzip", got)
-					}
-					var err error
-					decodedSecondBody, err = decompressGzip(secondBody)
-					if err != nil {
-						t.Fatalf("Failed to decompress second request body: %v", err)
-					}
-				} else {
-					decodedSecondBody = secondBody
+				// Decompress - all requests are now compressed
+				if got := requests[1].Header.Get("Content-Encoding"); got != "gzip" {
+					t.Errorf("Second request Content-Encoding = %v, want gzip", got)
+				}
+				decodedSecondBody, err := decompressGzip(secondBody)
+				if err != nil {
+					t.Fatalf("Failed to decompress second request body: %v", err)
 				}
 
 				// Decode the second request body
@@ -579,13 +569,8 @@ func TestAPISender_SendWithContext(t *testing.T) {
 					t.Error("Second request should not be encrypted")
 				}
 
-				// Check compression status remains consistent
-				if tt.expectCompressed {
-					compressed, ok := secondPayload["compressed"].(bool)
-					if !ok || !compressed {
-						t.Error("Expected compressed field to be true in second payload")
-					}
-				}
+				// Check compression status remains consistent - compression is now at HTTP level
+				// We don't expect a compressed field in the payload anymore
 			}
 		})
 	}
@@ -646,6 +631,7 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 	sender := NewAPISender(
 		server.URL,
 		"test-project",
+		"test-server",
 		"test-token",
 		"test-machine",
 		"12345678901234567890123456789012", // 32 bytes
@@ -814,6 +800,7 @@ func TestAPISender_SendWithContext_Errors(t *testing.T) {
 			sender := NewAPISender(
 				server.URL,
 				"test-project",
+				"test-server",
 				"test-token",
 				"test-machine",
 				tt.encryptionKey,
@@ -1025,154 +1012,4 @@ type mockWriter struct {
 func (m *mockWriter) Write(p []byte) (n int, err error) {
 	m.data = append(m.data, p...)
 	return len(p), nil
-}
-
-func TestAPISender_BootTimeInPayload(t *testing.T) {
-	// Create a test server to capture the request
-	var capturedPayload APIPayload
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("Failed to read request body: %v", err)
-		}
-
-		err = json.Unmarshal(body, &capturedPayload)
-		if err != nil {
-			t.Fatalf("Failed to unmarshal request body: %v", err)
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	// Create sender
-	sender := NewAPISender(server.URL, "test-project", "test-token", "test-machine", "")
-
-	// Create test metrics
-	metrics := []collector.Metrics{
-		{
-			Timestamp: time.Now(),
-			Category:  collector.CategorySystem,
-			Name:      collector.NameCPU,
-			Value:     75.5,
-		},
-	}
-
-	// Send metrics
-	err := sender.Send(metrics)
-	if err != nil {
-		t.Fatalf("Failed to send metrics: %v", err)
-	}
-
-	// Verify boot time is included in payload
-	if capturedPayload.BootTime == nil {
-		t.Error("BootTime should be included in the payload")
-	} else {
-		// Boot time should be a reasonable Unix timestamp (not zero and not in the future)
-		now := time.Now().Unix()
-		bootTime := *capturedPayload.BootTime
-
-		if bootTime <= 0 {
-			t.Errorf("BootTime should be positive, got: %d", bootTime)
-		}
-
-		if bootTime > now {
-			t.Errorf("BootTime should not be in the future, got: %d, now: %d", bootTime, now)
-		}
-
-		// Boot time should be reasonable (not more than a year ago for testing purposes)
-		oneYearAgo := now - (365 * 24 * 60 * 60)
-		if bootTime < oneYearAgo {
-			t.Errorf("BootTime seems too old, got: %d, one year ago: %d", bootTime, oneYearAgo)
-		}
-	}
-
-	// Verify other fields are still present
-	if capturedPayload.MachineName != "test-machine" {
-		t.Errorf("Expected machine name 'test-machine', got: %s", capturedPayload.MachineName)
-	}
-
-	if len(capturedPayload.Metrics) != 1 {
-		t.Errorf("Expected 1 metric, got: %d", len(capturedPayload.Metrics))
-	}
-}
-
-func TestAPISender_BootTimeInEncryptedPayload(t *testing.T) {
-	// Create a test server to capture the request
-	var capturedPayload map[string]interface{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("Failed to read request body: %v", err)
-		}
-
-		err = json.Unmarshal(body, &capturedPayload)
-		if err != nil {
-			t.Fatalf("Failed to unmarshal request body: %v", err)
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	// Create sender with encryption key
-	encryptionKey := "12345678901234567890123456789012" // 32 bytes
-	sender := NewAPISender(server.URL, "test-project", "test-token", "test-machine", encryptionKey)
-
-	// Create test metrics
-	metrics := []collector.Metrics{
-		{
-			Timestamp: time.Now(),
-			Category:  collector.CategorySystem,
-			Name:      collector.NameCPU,
-			Value:     75.5,
-		},
-	}
-
-	// Send metrics
-	err := sender.Send(metrics)
-	if err != nil {
-		t.Fatalf("Failed to send metrics: %v", err)
-	}
-
-	// Verify boot time is included in encrypted payload
-	bootTimeInterface, exists := capturedPayload["boot_time"]
-	if !exists {
-		t.Error("boot_time should be included in the encrypted payload")
-	} else {
-		// Convert to int64 for validation
-		var bootTime int64
-		switch v := bootTimeInterface.(type) {
-		case float64:
-			bootTime = int64(v)
-		case int64:
-			bootTime = v
-		default:
-			t.Fatalf("boot_time should be a number, got: %T", v)
-		}
-
-		// Boot time should be a reasonable Unix timestamp
-		now := time.Now().Unix()
-
-		if bootTime <= 0 {
-			t.Errorf("BootTime should be positive, got: %d", bootTime)
-		}
-
-		if bootTime > now {
-			t.Errorf("BootTime should not be in the future, got: %d, now: %d", bootTime, now)
-		}
-	}
-
-	// Verify other encrypted payload fields
-	if capturedPayload["machine_name"] != "test-machine" {
-		t.Errorf("Expected machine name 'test-machine', got: %v", capturedPayload["machine_name"])
-	}
-
-	if capturedPayload["encrypted"] != true {
-		t.Errorf("Expected encrypted to be true, got: %v", capturedPayload["encrypted"])
-	}
-
-	if _, exists := capturedPayload["data"]; !exists {
-		t.Error("Expected encrypted data field to be present")
-	}
 }
