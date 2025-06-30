@@ -1,9 +1,9 @@
 <p align="center"><a href="https://monitorly.app" target="_blank"><img src="https://raw.githubusercontent.com/monitorly-app/probe/master/logo.svg" width="400" alt="Monitorly Logo"></a></p>
 
 <p align="center">
-<a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/version-v0.2.1-blue" alt="Version"></a>
+<a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/version-v0.3.0-blue" alt="Version"></a>
 <a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build"></a>
-<a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/coverage-84.5%25-violet" alt="Coverage"></a>
+<a href="https://github.com/monitorly.app/probe"><img src="https://img.shields.io/badge/coverage-80.3%25-violet" alt="Coverage"></a>
 </p>
 
 # Monitorly Probe
