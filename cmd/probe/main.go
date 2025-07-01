@@ -166,18 +166,59 @@ func runMainLoop(ctx context.Context, configPath string, initialConfig *config.C
 			appWg.Wait()
 			return
 		case <-restartChan:
-			// Config changed, reload and restart
-			log.Println("Configuration changed, restarting...")
+			// Config changed, validate with API before restarting
+			log.Println("Configuration changed, validating with API...")
 			appCancel()
 			appWg.Wait()
 
-			// Load the new configuration
+			// Load the new configuration to get API credentials for validation
 			newCfg, err := loadConfig(configPath)
 			if err != nil {
 				log.Printf("Error loading new configuration: %v, continuing with old config", err)
 				continue
 			}
-			cfg = newCfg
+
+			// Only validate with API if sender target is 'api'
+			if newCfg.Sender.Target == "api" {
+				// Create a temporary APISender for config validation
+				machineName, err := newCfg.GetMachineName()
+				if err != nil {
+					log.Printf("Warning: Failed to get machine name for config validation: %v", err)
+					machineName = "unknown"
+				}
+
+				apiSender := sender.NewAPISender(
+					newCfg.API.URL,
+					newCfg.API.OrganizationID,
+					newCfg.API.ServerID,
+					newCfg.API.ApplicationToken,
+					machineName,
+					newCfg.API.EncryptionKey,
+					configPath,
+					restartChan,
+				)
+
+				// Send configuration for validation
+				if err := apiSender.SendConfigValidation(configPath); err != nil {
+					log.Printf("Configuration validation failed: %v", err)
+					// For 422 errors, the SendConfigValidation method will call log.Fatalf
+					// For other errors, we continue with the old config
+					if strings.Contains(err.Error(), "FATAL:") {
+						os.Exit(1)
+					}
+					continue
+				}
+			}
+
+			// Reload configuration again (it might have been updated by the API)
+			finalCfg, err := loadConfig(configPath)
+			if err != nil {
+				log.Printf("Error reloading configuration after validation: %v, continuing with old config", err)
+				continue
+			}
+			cfg = finalCfg
+
+			log.Println("Configuration validated and loaded successfully, restarting...")
 		}
 	}
 }

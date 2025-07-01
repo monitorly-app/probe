@@ -31,8 +31,8 @@ func (m *mockLogger) Printf(format string, v ...interface{}) {
 }
 
 func (m *mockLogger) Fatalf(format string, v ...interface{}) {
-	m.Printf(format, v...)
-	panic("logger.Fatalf called during test")
+	m.buffer.WriteString(fmt.Sprintf("FATAL: "+format+"\n", v...))
+	// Note: Don't panic during tests, just log the fatal message for verification
 }
 
 func (m *mockLogger) Close() error {
@@ -1428,5 +1428,173 @@ logging:
 	err = invalidSender.updateSendIntervalInConfig("60")
 	if err == nil {
 		t.Error("updateSendIntervalInConfig() expected error for missing send_interval")
+	}
+}
+
+func TestAPISender_SendConfigValidation(t *testing.T) {
+	// Setup mock logger
+	ml := &mockLogger{}
+	originalLogger := logger.GetDefaultLogger()
+	logger.SetDefaultLogger(ml)
+	defer logger.SetDefaultLogger(originalLogger)
+
+	// Create a temporary config file
+	tempConfigFile, err := os.CreateTemp("", "config_*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp config file: %v", err)
+	}
+	defer os.Remove(tempConfigFile.Name())
+
+	// Write test configuration
+	testConfig := `machine_name: "test-server"
+sender:
+  target: "api"
+  send_interval: 5m
+api:
+  url: "https://api.test.com"
+  organization_id: "test-org"
+  server_id: "test-server"
+  application_token: "test-token"
+collection:
+  cpu:
+    enabled: true
+    interval: 30s
+`
+	if err := os.WriteFile(tempConfigFile.Name(), []byte(testConfig), 0644); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	tests := []struct {
+		name               string
+		serverResponse     int
+		responseBody       string
+		responseHeaders    map[string]string
+		shouldReturnError  bool
+		shouldUpdateConfig bool
+		expectedLogRegex   string
+	}{
+		{
+			name:              "valid config - 200 OK",
+			serverResponse:    200,
+			responseBody:      `{"status": "valid", "message": "Configuration is valid"}`,
+			shouldReturnError: false,
+			expectedLogRegex:  "Configuration validated successfully by API",
+		},
+		{
+			name:           "config updated by API - 205",
+			serverResponse: 205,
+			responseBody: `machine_name: "test-server"
+sender:
+  target: "api"
+  send_interval: 10m  # Updated by API
+api:
+  url: "https://api.test.com"
+  organization_id: "test-org"
+  server_id: "test-server"
+  application_token: "test-token"
+collection:
+  cpu:
+    enabled: true
+    interval: 60s  # Updated by API
+`,
+			responseHeaders: map[string]string{
+				"Content-Type": "application/x-yaml",
+			},
+			shouldReturnError:  false,
+			shouldUpdateConfig: true,
+			expectedLogRegex:   "Warning: API has made changes to the configuration",
+		},
+		{
+			name:           "invalid config - 422",
+			serverResponse: 422,
+			responseBody:   `{"error": "Invalid configuration", "details": ["Missing required field: sender.target"]}`,
+			responseHeaders: map[string]string{
+				"Content-Type": "application/json",
+			},
+			shouldReturnError: true,
+			expectedLogRegex:  "FATAL: Configuration is invalid",
+		},
+		{
+			name:              "authentication error - 401",
+			serverResponse:    401,
+			responseBody:      `{"error": "Invalid authentication"}`,
+			shouldReturnError: true,
+		},
+		{
+			name:              "server not found - 404",
+			serverResponse:    404,
+			responseBody:      `{"error": "Server not found"}`,
+			shouldReturnError: true,
+		},
+		{
+			name:              "server error - 500",
+			serverResponse:    500,
+			responseBody:      `{"error": "Internal server error"}`,
+			shouldReturnError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear log buffer
+			ml.buffer.Reset()
+
+			// Create test server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Set response headers
+				for k, v := range tt.responseHeaders {
+					w.Header().Set(k, v)
+				}
+
+				// Set status code and write response
+				w.WriteHeader(tt.serverResponse)
+				w.Write([]byte(tt.responseBody))
+			}))
+			defer server.Close()
+
+			// Create APISender
+			sender := NewAPISender(
+				server.URL,
+				"test-org",
+				"test-server",
+				"test-token",
+				"test-machine",
+				"",
+				tempConfigFile.Name(),
+				make(chan struct{}, 1),
+			)
+
+			// Note: Fatal calls are captured by the mock logger's buffer
+
+			// Call SendConfigValidation
+			err := sender.SendConfigValidation(tempConfigFile.Name())
+
+			// Check error expectation
+			if (err != nil) != tt.shouldReturnError {
+				t.Errorf("SendConfigValidation() error = %v, wantErr %v", err, tt.shouldReturnError)
+			}
+
+			// Check if config was updated
+			if tt.shouldUpdateConfig {
+				updatedConfig, err := os.ReadFile(tempConfigFile.Name())
+				if err != nil {
+					t.Errorf("Failed to read updated config: %v", err)
+				} else {
+					if !strings.Contains(string(updatedConfig), "send_interval: 10m") {
+						t.Error("Config was not updated with API changes")
+					}
+				}
+			}
+
+			// Check log output
+			if tt.expectedLogRegex != "" {
+				logOutput := ml.buffer.String()
+				if !strings.Contains(logOutput, tt.expectedLogRegex) {
+					t.Errorf("Expected log to contain %q, got %q", tt.expectedLogRegex, logOutput)
+				}
+			}
+
+			// Fatal calls are logged to the mock logger buffer and checked via expectedLogRegex
+		})
 	}
 }

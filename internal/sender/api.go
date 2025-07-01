@@ -357,3 +357,88 @@ func (s *APISender) updateSendIntervalInConfig(rateLimitStr string) error {
 
 	return nil
 }
+
+// SendConfigValidation sends configuration to API for validation
+func (s *APISender) SendConfigValidation(configPath string) error {
+	// Read configuration file
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Build API URL for config validation
+	url := fmt.Sprintf("%s/api/%s/servers/%s/config", s.baseURL, s.organizationID, s.serverID)
+
+	// Create request with YAML config in body
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(configData))
+	if err != nil {
+		return fmt.Errorf("failed to create config validation request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/x-yaml")
+	req.Header.Set("Authorization", "Bearer "+s.applicationToken)
+
+	// Send request
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send config validation request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Handle different response codes
+	switch resp.StatusCode {
+	case 200:
+		// Configuration is valid - log and return success for restart
+		logger.GetDefaultLogger().Printf("Configuration validated successfully by API")
+		return nil
+
+	case 205:
+		// API made changes - update local config and restart
+		logger.GetDefaultLogger().Printf("Warning: API has made changes to the configuration")
+
+		// Read the updated configuration from response
+		updatedConfig, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read updated config from API: %w", err)
+		}
+
+		// Write updated configuration to file
+		err = os.WriteFile(configPath, updatedConfig, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write updated config: %w", err)
+		}
+
+		logger.GetDefaultLogger().Printf("Configuration updated with API changes, restarting...")
+		return nil
+
+	case 422:
+		// Configuration is invalid - read error details and return fatal error
+		bodyData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			logger.GetDefaultLogger().Fatalf("FATAL: Configuration is invalid (status 422) - unable to read error details")
+		}
+
+		var errorResponse struct {
+			Error   string      `json:"error"`
+			Details interface{} `json:"details"`
+		}
+
+		if err := json.Unmarshal(bodyData, &errorResponse); err != nil {
+			logger.GetDefaultLogger().Fatalf("FATAL: Configuration is invalid (status 422) - %s", string(bodyData))
+		} else {
+			logger.GetDefaultLogger().Fatalf("FATAL: Configuration is invalid - %s: %v", errorResponse.Error, errorResponse.Details)
+		}
+		return fmt.Errorf("configuration validation failed")
+
+	case 401:
+		return fmt.Errorf("FATAL: Invalid authentication for config validation (status 401)")
+
+	case 404:
+		return fmt.Errorf("FATAL: Organization or server not found for config validation (status 404)")
+
+	default:
+		bodyData, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("config validation failed with status %d: %s", resp.StatusCode, string(bodyData))
+	}
+}
