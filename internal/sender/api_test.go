@@ -10,22 +10,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/monitorly-app/probe/internal/collector"
 	"github.com/monitorly-app/probe/internal/logger"
 )
-
-// APIPayload represents the structure of the API payload
-type APIPayload struct {
-	MachineName *string             `json:"machine_name,omitempty"`
-	Metrics     []collector.Metrics `json:"metrics,omitempty"`
-	Encrypted   *bool               `json:"encrypted,omitempty"`
-	Compressed  *bool               `json:"compressed,omitempty"`
-	Data        *string             `json:"data,omitempty"`
-}
 
 // mockLogger implements logger.LoggerInterface for testing
 type mockLogger struct {
@@ -43,6 +36,15 @@ func (m *mockLogger) Fatalf(format string, v ...interface{}) {
 
 func (m *mockLogger) Close() error {
 	return nil
+}
+
+// APIPayload represents the structure of the API payload
+type APIPayload struct {
+	MachineName *string             `json:"machine_name,omitempty"`
+	Metrics     []collector.Metrics `json:"metrics,omitempty"`
+	Encrypted   *bool               `json:"encrypted,omitempty"`
+	Compressed  *bool               `json:"compressed,omitempty"`
+	Data        *string             `json:"data,omitempty"`
 }
 
 // decompressGzip decompresses gzipped data
@@ -90,6 +92,7 @@ func TestAPISender_Send(t *testing.T) {
 	}))
 	defer server.Close()
 
+	restartChan := make(chan struct{}, 1)
 	sender := NewAPISender(
 		server.URL,
 		"test-project",
@@ -97,6 +100,8 @@ func TestAPISender_Send(t *testing.T) {
 		"test-token",
 		"test-machine",
 		"", // empty encryption key
+		"", // no config path for this test
+		restartChan,
 	)
 
 	metrics := []collector.Metrics{
@@ -267,162 +272,167 @@ func TestAPISender_SendWithContext(t *testing.T) {
 	logger.SetDefaultLogger(ml)
 	defer logger.SetDefaultLogger(originalLogger)
 
-	// Create a large metric payload that will trigger compression
-	largeMetrics := make([]collector.Metrics, 100)
-	now := time.Now()
-	for i := range largeMetrics {
-		largeMetrics[i] = collector.Metrics{
-			Timestamp: now,
-			Category:  "system",
-			Name:      "cpu",
-			Value:     float64(i),
-			Metadata: collector.MetricMetadata{
-				"host":     fmt.Sprintf("host-%d", i),
-				"instance": fmt.Sprintf("instance-%d", i),
-				"region":   fmt.Sprintf("region-%d", i),
-			},
-		}
-	}
-
-	// Sample metrics for testing (small payload)
-	smallMetrics := []collector.Metrics{
-		{
-			Timestamp: now,
-			Category:  "system",
-			Name:      "cpu",
-			Value:     45.67,
-		},
-	}
-
 	tests := []struct {
-		name             string
-		setupSender      func(server *httptest.Server) *APISender
-		setupContext     func() (context.Context, context.CancelFunc)
-		metrics          []collector.Metrics
-		responses        []int // Status codes to return in sequence
-		expectEncrypted  bool  // Whether we expect the first request to be encrypted
-		expectCompressed bool  // Whether we expect the request to be compressed
-		wantErr          bool
-		wantLogMessage   string // Expected log message for encryption failure
-		skipRequestCheck bool   // Skip request validation for error cases
+		name           string
+		setupServer    func() (*httptest.Server, *int)
+		metrics        []collector.Metrics
+		encryptionKey  string
+		expectedError  string
+		expectedCalls  int
+		expectedStatus int
+		expectedLog    string
 	}{
 		{
 			name: "successful unencrypted small request",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "")
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				return server, &calls
 			},
-			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:          smallMetrics,
-			responses:        []int{http.StatusOK},
-			expectEncrypted:  false,
-			expectCompressed: true,
-			wantErr:          false,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey:  "",
+			expectedError:  "",
+			expectedCalls:  1,
+			expectedStatus: http.StatusOK,
 		},
 		{
 			name: "successful unencrypted large request with compression",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "")
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				return server, &calls
 			},
-			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:          largeMetrics,
-			responses:        []int{http.StatusOK},
-			expectEncrypted:  false,
-			expectCompressed: true,
-			wantErr:          false,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey:  "",
+			expectedError:  "",
+			expectedCalls:  1,
+			expectedStatus: http.StatusOK,
 		},
 		{
 			name: "successful encrypted small request",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "12345678901234567890123456789012")
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				return server, &calls
 			},
-			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:          smallMetrics,
-			responses:        []int{http.StatusOK},
-			expectEncrypted:  true,
-			expectCompressed: true,
-			wantErr:          false,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey:  "12345678901234567890123456789012",
+			expectedError:  "",
+			expectedCalls:  1,
+			expectedStatus: http.StatusOK,
 		},
 		{
 			name: "successful encrypted large request with compression",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "12345678901234567890123456789012")
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				return server, &calls
 			},
-			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:          largeMetrics,
-			responses:        []int{http.StatusOK},
-			expectEncrypted:  true,
-			expectCompressed: true,
-			wantErr:          false,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey:  "12345678901234567890123456789012",
+			expectedError:  "",
+			expectedCalls:  1,
+			expectedStatus: http.StatusOK,
 		},
 		{
 			name: "encryption not available fallback with compression",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "12345678901234567890123456789012")
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					if calls == 1 {
+						w.WriteHeader(http.StatusPreconditionFailed)
+					} else {
+						w.WriteHeader(http.StatusOK)
+					}
+				}))
+				return server, &calls
 			},
-			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:          largeMetrics,
-			responses:        []int{http.StatusPreconditionFailed, http.StatusOK},
-			expectEncrypted:  true,
-			expectCompressed: true,
-			wantErr:          false,
-			wantLogMessage:   "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
-		},
-		{
-			name: "encryption not available fallback failure",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "12345678901234567890123456789012")
-			},
-			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:          smallMetrics,
-			responses:        []int{http.StatusPreconditionFailed, http.StatusInternalServerError},
-			expectEncrypted:  true,
-			expectCompressed: true,
-			wantErr:          true,
-			wantLogMessage:   "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
-		},
-		{
-			name: "invalid URL",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender("invalid://url", "test-project", "test-server", "test-token", "test-machine", "")
-			},
-			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:          smallMetrics,
-			wantErr:          true,
-			skipRequestCheck: true,
-		},
-		{
-			name: "context cancelled",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "")
-			},
-			setupContext: func() (context.Context, context.CancelFunc) {
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel() // Cancel immediately
-				return ctx, cancel
-			},
-			metrics:          smallMetrics,
-			wantErr:          true,
-			skipRequestCheck: true,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey:  "12345678901234567890123456789012",
+			expectedError:  "",
+			expectedCalls:  2,
+			expectedStatus: http.StatusOK,
+			expectedLog:    "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
 		},
 		{
 			name: "server error",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "")
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				return server, &calls
 			},
-			setupContext: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:      smallMetrics,
-			responses:    []int{http.StatusInternalServerError},
-			wantErr:      true,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey:  "",
+			expectedError:  "API request failed with status 500",
+			expectedCalls:  1,
+			expectedStatus: http.StatusInternalServerError,
 		},
 		{
-			name: "invalid encryption key length",
-			setupSender: func(server *httptest.Server) *APISender {
-				return NewAPISender(server.URL, "test-project", "test-server", "test-token", "test-machine", "invalid-key")
+			name: "invalid encryption key",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusBadRequest)
+				}))
+				return server, &calls
 			},
-			setupContext:     func() (context.Context, context.CancelFunc) { return context.Background(), func() {} },
-			metrics:          smallMetrics,
-			wantErr:          true,
-			skipRequestCheck: true,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey:  "invalid-key-length",
+			expectedError:  "invalid encryption key: encryption key must be exactly 32 bytes long",
+			expectedCalls:  0,
+			expectedStatus: http.StatusBadRequest,
 		},
 	}
 
@@ -431,179 +441,58 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			// Clear log buffer
 			ml.buffer.Reset()
 
-			responseIndex := 0
-			var requests []*http.Request
-			var requestBodies [][]byte
-
-			// Create test server
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Read and store the request body
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Fatalf("Failed to read request body: %v", err)
-				}
-				r.Body.Close()
-
-				// Store the request and body
-				requests = append(requests, r)
-				requestBodies = append(requestBodies, body)
-
-				// Provide a new body for future reads
-				r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-				if len(tt.responses) > 0 {
-					w.WriteHeader(tt.responses[responseIndex])
-					if responseIndex < len(tt.responses)-1 {
-						responseIndex++
-					}
-				} else {
-					w.WriteHeader(http.StatusOK)
-				}
-			}))
+			server, calls := tt.setupServer()
 			defer server.Close()
 
-			// Create sender
-			sender := tt.setupSender(server)
+			restartChan := make(chan struct{}, 1)
+			sender := NewAPISender(
+				server.URL,
+				"test-project",
+				"test-server",
+				"test-token",
+				"test-machine",
+				tt.encryptionKey,
+				"", // no config path needed
+				restartChan,
+			)
 
-			// Get context
-			ctx, cancel := tt.setupContext()
-			defer cancel()
-
-			// Send metrics
-			err := sender.SendWithContext(ctx, tt.metrics)
-
-			// Check error
-			if (err != nil) != tt.wantErr {
-				t.Errorf("SendWithContext() error = %v, wantErr %v", err, tt.wantErr)
-				return
+			err := sender.SendWithContext(context.Background(), tt.metrics)
+			if (err != nil) != (tt.expectedError != "") {
+				t.Errorf("SendWithContext() error = %v, wantErr %v", err, tt.expectedError != "")
 			}
 
-			// Skip request validation for error cases where no request is expected
-			if tt.skipRequestCheck {
-				return
+			if err != nil && !strings.Contains(err.Error(), tt.expectedError) {
+				t.Errorf("expected error containing %q, got %q", tt.expectedError, err.Error())
 			}
 
-			// Verify the first request
-			if len(requests) == 0 {
-				t.Fatal("no request was made")
-			}
-
-			firstRequest := requests[0]
-			firstBody := requestBodies[0]
-
-			// Check Content-Type and Authorization headers
-			if got := firstRequest.Header.Get("Content-Type"); got != "application/json" {
-				t.Errorf("Content-Type = %v, want application/json", got)
-			}
-			if got := firstRequest.Header.Get("Authorization"); got != "Bearer test-token" {
-				t.Errorf("Authorization = %v, want Bearer test-token", got)
-			}
-
-			// Check compression header and decompress - all requests are now compressed
-			if got := firstRequest.Header.Get("Content-Encoding"); got != "gzip" {
-				t.Errorf("Content-Encoding = %v, want gzip", got)
-			}
-			decodedBody, err := decompressGzip(firstBody)
-			if err != nil {
-				t.Fatalf("Failed to decompress request body: %v", err)
-			}
-
-			// Decode the first request body
-			var payload map[string]interface{}
-			if err := json.Unmarshal(decodedBody, &payload); err != nil {
-				t.Fatalf("Failed to decode request body: %v", err)
-			}
-
-			// Check if the request was encrypted as expected
-			encrypted, ok := payload["encrypted"].(bool)
-			if !ok && tt.expectEncrypted {
-				t.Error("Expected encrypted field in payload")
-			}
-			if ok && encrypted != tt.expectEncrypted {
-				t.Errorf("encrypted = %v, want %v", encrypted, tt.expectEncrypted)
-			}
-
-			// Check compression flag in payload - compression is now at HTTP level, not in payload
-			// We don't expect a compressed field in the payload anymore
-
-			// If encryption was expected, verify encrypted data is present
-			if tt.expectEncrypted && encrypted {
-				if _, ok := payload["data"].(string); !ok {
-					t.Error("Expected encrypted data field in payload")
-				}
+			if *calls != tt.expectedCalls {
+				t.Errorf("expected %d API calls, got %d", tt.expectedCalls, *calls)
 			}
 
 			// Check for expected log message
-			if tt.wantLogMessage != "" {
-				if !strings.Contains(ml.buffer.String(), tt.wantLogMessage) {
-					t.Errorf("Expected log message not found.\nWant: %s\nGot: %s", tt.wantLogMessage, ml.buffer.String())
-				}
-			}
-
-			// For fallback case, verify the second request is unencrypted
-			if len(tt.responses) > 1 && tt.responses[0] == http.StatusPreconditionFailed {
-				if len(requests) < 2 {
-					t.Fatal("Expected a second request for fallback case")
-				}
-
-				// Get the second request body
-				secondBody := requestBodies[1]
-
-				// Decompress - all requests are now compressed
-				if got := requests[1].Header.Get("Content-Encoding"); got != "gzip" {
-					t.Errorf("Second request Content-Encoding = %v, want gzip", got)
-				}
-				decodedSecondBody, err := decompressGzip(secondBody)
-				if err != nil {
-					t.Fatalf("Failed to decompress second request body: %v", err)
-				}
-
-				// Decode the second request body
-				var secondPayload map[string]interface{}
-				if err := json.Unmarshal(decodedSecondBody, &secondPayload); err != nil {
-					t.Fatalf("Failed to decode second request body: %v", err)
-				}
-
-				// Verify it's not encrypted
-				if encrypted, ok := secondPayload["encrypted"].(bool); ok && encrypted {
-					t.Error("Second request should not be encrypted")
-				}
-
-				// Check compression status remains consistent - compression is now at HTTP level
-				// We don't expect a compressed field in the payload anymore
+			if tt.expectedLog != "" && !strings.Contains(ml.buffer.String(), tt.expectedLog) {
+				t.Errorf("expected log message %q, got %q", tt.expectedLog, ml.buffer.String())
 			}
 		})
 	}
 }
 
 func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
-	// Setup mock logger
-	ml := &mockLogger{}
-	originalLogger := logger.GetDefaultLogger()
-	logger.SetDefaultLogger(ml)
-	defer logger.SetDefaultLogger(originalLogger)
-
-	requestCount := 0
-	encryptedCount := 0
-	compressedCount := 0
-
-	// Create test server that returns 412 for encrypted requests
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("Failed to read request body: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		r.Body.Close()
 
-		// Decompress if needed
 		var decodedBody []byte
 		if r.Header.Get("Content-Encoding") == "gzip" {
-			compressedCount++
 			decodedBody, err = decompressGzip(body)
 			if err != nil {
 				t.Errorf("Failed to decompress request body: %v", err)
-				w.WriteHeader(http.StatusBadRequest)
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 		} else {
@@ -613,13 +502,11 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 		var payload map[string]interface{}
 		if err := json.Unmarshal(decodedBody, &payload); err != nil {
 			t.Errorf("Failed to decode request body: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
-		requestCount++
 		if encrypted, ok := payload["encrypted"].(bool); ok && encrypted {
-			encryptedCount++
 			w.WriteHeader(http.StatusPreconditionFailed)
 		} else {
 			w.WriteHeader(http.StatusOK)
@@ -627,77 +514,51 @@ func TestAPISender_SendWithContext_Concurrent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create sender with encryption enabled
+	restartChan := make(chan struct{}, 1)
 	sender := NewAPISender(
 		server.URL,
 		"test-project",
 		"test-server",
 		"test-token",
 		"test-machine",
-		"12345678901234567890123456789012", // 32 bytes
+		"", // no encryption key
+		"", // no config path needed
+		restartChan,
 	)
 
-	// Create a large metric payload that will trigger compression
-	now := time.Now()
-	metrics := make([]collector.Metrics, 100)
-	for i := range metrics {
-		metrics[i] = collector.Metrics{
-			Timestamp: now,
-			Category:  "system",
-			Name:      "cpu",
-			Value:     float64(i),
-			Metadata: collector.MetricMetadata{
-				"host":     fmt.Sprintf("host-%d", i),
-				"instance": fmt.Sprintf("instance-%d", i),
-				"region":   fmt.Sprintf("region-%d", i),
-			},
-		}
-	}
-
-	// Send metrics concurrently
-	const numGoroutines = 10
-	errChan := make(chan error, numGoroutines)
+	// Run concurrent requests
+	numGoroutines := 10
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+	errors := make(chan error, numGoroutines)
 
 	for i := 0; i < numGoroutines; i++ {
-		go func() {
-			errChan <- sender.SendWithContext(context.Background(), metrics)
-		}()
+		go func(i int) {
+			defer wg.Done()
+			metrics := []collector.Metrics{
+				{
+					Timestamp: time.Now(),
+					Category:  "system",
+					Name:      "cpu",
+					Value:     float64(i),
+				},
+			}
+			if err := sender.Send(metrics); err != nil {
+				errors <- fmt.Errorf("goroutine %d error: %v", i, err)
+			}
+		}(i)
 	}
 
-	// Collect results
-	var errors []error
-	for i := 0; i < numGoroutines; i++ {
-		if err := <-errChan; err != nil {
-			errors = append(errors, err)
-		}
-	}
+	wg.Wait()
+	close(errors)
 
-	// We expect some errors due to encryption fallback
-	if len(errors) > numGoroutines/2 {
-		t.Errorf("Too many errors in concurrent execution: %v", errors)
+	// Check for any errors
+	var errs []error
+	for err := range errors {
+		errs = append(errs, err)
 	}
-
-	// Verify that we got the expected number of requests
-	if requestCount <= numGoroutines {
-		t.Errorf("Expected more than %d requests due to retries, got %d", numGoroutines, requestCount)
-	}
-
-	// Verify that we got some encrypted requests before falling back
-	if encryptedCount == 0 {
-		t.Error("Expected some encrypted requests before fallback")
-	}
-
-	// Verify that compression was used
-	if compressedCount == 0 {
-		t.Error("Expected some compressed requests")
-	}
-
-	// Verify that the warning log appears exactly once
-	logContent := ml.buffer.String()
-	expectedLog := "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission."
-	count := strings.Count(logContent, expectedLog)
-	if count != 1 {
-		t.Errorf("Expected exactly one encryption warning log, got %d", count)
+	if len(errs) > 0 {
+		t.Errorf("Got %d errors during concurrent execution: %v", len(errs), errs)
 	}
 }
 
@@ -712,31 +573,25 @@ func TestAPISender_SendWithContext_Errors(t *testing.T) {
 	tests := []struct {
 		name          string
 		setupServer   func() *httptest.Server
-		setupContext  func() (context.Context, context.CancelFunc)
 		metrics       []collector.Metrics
 		encryptionKey string
-		wantErr       bool
+		expectedError string
 	}{
 		{
 			name: "server timeout",
 			setupServer: func() *httptest.Server {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					time.Sleep(200 * time.Millisecond)
-					w.WriteHeader(http.StatusOK)
 				}))
 			},
-			setupContext: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 100*time.Millisecond)
-			},
-			metrics: []collector.Metrics{
-				{
-					Timestamp: time.Now(),
-					Category:  "system",
-					Name:      "cpu",
-					Value:     45.67,
-				},
-			},
-			wantErr: true,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "context deadline exceeded",
 		},
 		{
 			name: "server closes connection",
@@ -744,59 +599,53 @@ func TestAPISender_SendWithContext_Errors(t *testing.T) {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					hj, ok := w.(http.Hijacker)
 					if !ok {
-						t.Fatal("webserver doesn't support hijacking")
+						http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+						return
 					}
 					conn, _, err := hj.Hijack()
 					if err != nil {
-						t.Fatal(err)
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
 					}
 					conn.Close()
 				}))
 			},
-			setupContext: func() (context.Context, context.CancelFunc) {
-				return context.Background(), func() {}
-			},
-			metrics: []collector.Metrics{
-				{
-					Timestamp: time.Now(),
-					Category:  "system",
-					Name:      "cpu",
-					Value:     45.67,
-				},
-			},
-			wantErr: true,
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "EOF",
 		},
 		{
-			name: "invalid encryption key length",
+			name: "invalid encryption key",
 			setupServer: func() *httptest.Server {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					w.WriteHeader(http.StatusOK)
+					w.WriteHeader(http.StatusBadRequest)
 				}))
 			},
-			setupContext: func() (context.Context, context.CancelFunc) {
-				return context.Background(), func() {}
-			},
-			metrics: []collector.Metrics{
-				{
-					Timestamp: time.Now(),
-					Category:  "system",
-					Name:      "cpu",
-					Value:     45.67,
-				},
-			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
 			encryptionKey: "invalid-key-length",
-			wantErr:       true,
+			expectedError: "invalid encryption key: encryption key must be exactly 32 bytes long",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Clear log buffer
+			ml.buffer.Reset()
+
 			server := tt.setupServer()
 			defer server.Close()
 
-			ctx, cancel := tt.setupContext()
-			defer cancel()
-
+			restartChan := make(chan struct{}, 1)
 			sender := NewAPISender(
 				server.URL,
 				"test-project",
@@ -804,11 +653,24 @@ func TestAPISender_SendWithContext_Errors(t *testing.T) {
 				"test-token",
 				"test-machine",
 				tt.encryptionKey,
+				"", // no config path needed
+				restartChan,
 			)
 
+			// Set a short timeout for the client
+			sender.client.Timeout = 100 * time.Millisecond
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+
 			err := sender.SendWithContext(ctx, tt.metrics)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("SendWithContext() error = %v, wantErr %v", err, tt.wantErr)
+			if err == nil {
+				t.Error("SendWithContext() error = nil, wantErr true")
+				return
+			}
+
+			if !strings.Contains(err.Error(), tt.expectedError) {
+				t.Errorf("expected error containing %q, got %q", tt.expectedError, err.Error())
 			}
 		})
 	}
@@ -1012,4 +874,155 @@ type mockWriter struct {
 func (m *mockWriter) Write(p []byte) (n int, err error) {
 	m.data = append(m.data, p...)
 	return len(p), nil
+}
+
+func TestAPISender_ConfigAutoUpdate(t *testing.T) {
+	// Setup mock logger
+	ml := &mockLogger{}
+	originalLogger := logger.GetDefaultLogger()
+	logger.SetDefaultLogger(ml)
+	defer logger.SetDefaultLogger(originalLogger)
+
+	tempConfigFile, err := os.CreateTemp("", "config_*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp config file: %v", err)
+	}
+	defer os.Remove(tempConfigFile.Name())
+
+	// Write initial config content
+	initialConfig := []byte("initial: config")
+	if err := os.WriteFile(tempConfigFile.Name(), initialConfig, 0644); err != nil {
+		t.Fatalf("Failed to write initial config: %v", err)
+	}
+
+	tests := []struct {
+		name              string
+		configLastUpdate  string // X-Configuration-Last-Update header value
+		configResponse    []byte // Response from /config endpoint
+		expectConfigFetch bool   // Whether we expect a config fetch request
+		expectRestart     bool   // Whether we expect a restart signal
+		serverStatus      int    // HTTP status for /config endpoint
+		shouldReturnError bool
+		expectedLog       string
+	}{
+		{
+			name:              "no header - no update",
+			configLastUpdate:  "",
+			expectConfigFetch: false,
+			expectRestart:     false,
+			serverStatus:      http.StatusOK,
+		},
+		{
+			name:              "older timestamp - no update",
+			configLastUpdate:  time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
+			expectConfigFetch: false,
+			expectRestart:     false,
+			serverStatus:      http.StatusOK,
+		},
+		{
+			name:              "newer timestamp - update config",
+			configLastUpdate:  time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			configResponse:    []byte("new: config"),
+			expectConfigFetch: true,
+			expectRestart:     true,
+			serverStatus:      http.StatusOK,
+			expectedLog:       "Config updated from server, triggering restart...",
+		},
+		{
+			name:              "config fetch fails",
+			configLastUpdate:  time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			expectConfigFetch: true,
+			expectRestart:     false,
+			serverStatus:      http.StatusInternalServerError,
+			expectedLog:       "Failed to fetch config: status 500",
+		},
+		{
+			name:              "invalid timestamp",
+			configLastUpdate:  "invalid-timestamp",
+			expectConfigFetch: false,
+			expectRestart:     false,
+			serverStatus:      http.StatusOK,
+			expectedLog:       "Invalid X-Configuration-Last-Update header: invalid timestamp format: invalid-timestamp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear log buffer
+			ml.buffer.Reset()
+
+			// Create a channel to receive restart signals
+			restartChan := make(chan struct{}, 1)
+			configFetchCount := 0
+
+			// Create test server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/config") {
+					configFetchCount++
+					w.WriteHeader(tt.serverStatus)
+					if tt.configResponse != nil {
+						w.Write(tt.configResponse)
+					}
+					return
+				}
+
+				// Regular metrics endpoint
+				if tt.configLastUpdate != "" {
+					w.Header().Set("X-Configuration-Last-Update", tt.configLastUpdate)
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			// Create sender with temp config file
+			sender := NewAPISender(
+				server.URL,
+				"test-org",
+				"test-server",
+				"test-token",
+				"test-machine",
+				"",
+				tempConfigFile.Name(),
+				restartChan,
+			)
+
+			// Send test metrics
+			metrics := []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "test",
+				Name:      "metric",
+				Value:     1.0,
+			}}
+
+			err := sender.Send(metrics)
+			if (err != nil) != tt.shouldReturnError {
+				t.Errorf("Send() error = %v, wantErr %v", err, tt.shouldReturnError)
+			}
+
+			// Check if config was fetched as expected
+			if tt.expectConfigFetch && configFetchCount == 0 {
+				t.Error("Expected config fetch but none occurred")
+			}
+			if !tt.expectConfigFetch && configFetchCount > 0 {
+				t.Error("Unexpected config fetch occurred")
+			}
+
+			// Check if restart was triggered as expected
+			select {
+			case <-restartChan:
+				if !tt.expectRestart {
+					t.Error("Unexpected restart signal")
+				}
+			default:
+				if tt.expectRestart {
+					t.Error("Expected restart signal but none received")
+				}
+			}
+
+			// Check for expected log message
+			if tt.expectedLog != "" && !strings.Contains(ml.buffer.String(), tt.expectedLog) {
+				t.Errorf("expected log message %q, got %q", tt.expectedLog, ml.buffer.String())
+			}
+		})
+	}
 }

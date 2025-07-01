@@ -1022,6 +1022,7 @@ func TestRunApp(t *testing.T) {
 	// Create a temporary directory for test files
 	tempDir := t.TempDir()
 	logFile := filepath.Join(tempDir, "test.log")
+	configPath := filepath.Join(tempDir, "config.yaml")
 
 	// Create a minimal valid config
 	cfg := &config.Config{
@@ -1058,8 +1059,11 @@ func TestRunApp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
+	// Create restart channel
+	restartChan := make(chan struct{}, 1)
+
 	// Run the app
-	wg := runApp(ctx, cfg)
+	wg := runApp(ctx, cfg, configPath, restartChan)
 
 	// Wait for a longer time to let collectors run and sender send metrics
 	time.Sleep(300 * time.Millisecond)

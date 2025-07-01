@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,18 +27,23 @@ type APISender struct {
 	encryptionKey         string
 	client                *http.Client
 	encryptionWarningOnce sync.Once
+	configPath            string        // Path to the config file
+	restartChan           chan struct{} // Channel to signal restart
 }
 
 // NewAPISender creates a new APISender instance
-func NewAPISender(baseURL, organizationID, serverID, applicationToken, machineName, encryptionKey string) *APISender {
+func NewAPISender(baseURL, organizationID, serverID, applicationToken, machineName, encryptionKey, configPath string, restartChan chan struct{}) *APISender {
 	return &APISender{
-		baseURL:          baseURL,
-		organizationID:   organizationID,
-		serverID:         serverID,
-		applicationToken: applicationToken,
-		machineName:      machineName,
-		encryptionKey:    encryptionKey,
-		client:           &http.Client{Timeout: 30 * time.Second},
+		baseURL:               baseURL,
+		organizationID:        organizationID,
+		serverID:              serverID,
+		applicationToken:      applicationToken,
+		machineName:           machineName,
+		encryptionKey:         encryptionKey,
+		client:                &http.Client{Timeout: 30 * time.Second},
+		encryptionWarningOnce: sync.Once{},
+		configPath:            configPath,
+		restartChan:           restartChan,
 	}
 }
 
@@ -137,6 +145,8 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 	}
 	defer resp.Body.Close()
 
+	s.checkConfigUpdate(resp)
+
 	// Handle encryption not available (premium feature)
 	if resp.StatusCode == http.StatusPreconditionFailed && isEncrypted {
 		// Log warning only once per sender instance
@@ -177,6 +187,8 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 			return fmt.Errorf("failed to send fallback request: %w", err)
 		}
 		defer resp.Body.Close()
+
+		s.checkConfigUpdate(resp)
 	}
 
 	// Check response status
@@ -185,4 +197,72 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 	}
 
 	return nil
+}
+
+// checkConfigUpdate checks the X-Configuration-Last-Update header and updates config if needed
+func (s *APISender) checkConfigUpdate(resp *http.Response) {
+	header := resp.Header.Get("X-Configuration-Last-Update")
+	if header == "" || s.configPath == "" || s.restartChan == nil {
+		return
+	}
+	serverTime, err := parseConfigTimestamp(header)
+	if err != nil {
+		logger.GetDefaultLogger().Printf("Invalid X-Configuration-Last-Update header: %v", err)
+		return
+	}
+	fileInfo, err := os.Stat(s.configPath)
+	if err != nil {
+		logger.GetDefaultLogger().Printf("Could not stat config file: %v", err)
+		return
+	}
+	if !serverTime.After(fileInfo.ModTime()) {
+		return
+	}
+	// Fetch new config
+	url := strings.TrimRight(s.baseURL, "/") + "/api/" + s.organizationID + "/servers/" + s.serverID + "/config"
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		logger.GetDefaultLogger().Printf("Failed to create config fetch request: %v", err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+s.applicationToken)
+	resp2, err := s.client.Do(req)
+	if err != nil {
+		logger.GetDefaultLogger().Printf("Failed to fetch latest config: %v", err)
+		return
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != 200 {
+		logger.GetDefaultLogger().Printf("Failed to fetch config: status %d", resp2.StatusCode)
+		return
+	}
+	data, err := io.ReadAll(resp2.Body)
+	if err != nil {
+		logger.GetDefaultLogger().Printf("Failed to read config body: %v", err)
+		return
+	}
+	err = os.WriteFile(s.configPath, data, 0644)
+	if err != nil {
+		logger.GetDefaultLogger().Printf("Failed to write new config: %v", err)
+		return
+	}
+	logger.GetDefaultLogger().Printf("Config updated from server, triggering restart...")
+	select {
+	case s.restartChan <- struct{}{}:
+	default:
+	}
+}
+
+// parseConfigTimestamp parses the config update timestamp from header
+func parseConfigTimestamp(ts string) (time.Time, error) {
+	// Try RFC3339 and fallback to Unix
+	t, err := time.Parse(time.RFC3339, ts)
+	if err == nil {
+		return t, nil
+	}
+	// Try as Unix timestamp
+	if unix, err2 := time.ParseInLocation("2006-01-02 15:04:05", ts, time.UTC); err2 == nil {
+		return unix, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid timestamp format: %s", ts)
 }

@@ -149,13 +149,13 @@ func startUpdateChecker(ctx context.Context, cfg *config.Config) {
 }
 
 // runMainLoop runs the main application loop with config reloading
-func runMainLoop(ctx context.Context, configPath string, initialConfig *config.Config, restartChan <-chan struct{}) {
+func runMainLoop(ctx context.Context, configPath string, initialConfig *config.Config, restartChan chan struct{}) {
 	cfg := initialConfig
 
 	for {
 		// Start the application with the current config
 		appCtx, appCancel := context.WithCancel(ctx)
-		appWg := runApp(appCtx, cfg)
+		appWg := runApp(appCtx, cfg, configPath, restartChan)
 
 		// Wait for either a config change or application shutdown
 		select {
@@ -351,7 +351,7 @@ func watchConfigFile(ctx context.Context, watcher *fsnotify.Watcher, configPath 
 }
 
 // runApp starts the application with the given configuration
-func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
+func runApp(ctx context.Context, cfg *config.Config, configPath string, restartChan chan struct{}) *sync.WaitGroup {
 	// Initialize logger
 	if err := logger.Initialize(cfg.Logging.FilePath); err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
@@ -382,6 +382,8 @@ func runApp(ctx context.Context, cfg *config.Config) *sync.WaitGroup {
 			cfg.API.ApplicationToken,
 			machineName,
 			cfg.API.EncryptionKey,
+			configPath,
+			restartChan,
 		)
 		logger.Printf("Metrics will be sent to API: %s for organization: %s", cfg.API.URL, cfg.API.OrganizationID)
 		if cfg.API.EncryptionKey != "" {
