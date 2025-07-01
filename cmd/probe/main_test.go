@@ -20,6 +20,11 @@ import (
 	"github.com/monitorly-app/probe/internal/config"
 )
 
+// Note: The fatal error handling in sendRoutine (calling os.Exit on 401/404 errors)
+// cannot be easily tested in an automated way. This functionality should be tested
+// manually by verifying that the probe exits with status code 1 when receiving
+// 401 or 404 responses from the API.
+
 func TestParseCommandLineFlags(t *testing.T) {
 	tests := []struct {
 		name     string

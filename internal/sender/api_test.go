@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -87,34 +88,246 @@ func (m *mockCompressWriter) Bytes() []byte {
 
 // Test the Send method directly
 func TestAPISender_Send(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
+	// Setup mock logger
+	ml := &mockLogger{}
+	originalLogger := logger.GetDefaultLogger()
+	logger.SetDefaultLogger(ml)
+	defer logger.SetDefaultLogger(originalLogger)
 
-	restartChan := make(chan struct{}, 1)
-	sender := NewAPISender(
-		server.URL,
-		"test-project",
-		"test-server",
-		"test-token",
-		"test-machine",
-		"", // empty encryption key
-		"", // no config path for this test
-		restartChan,
-	)
-
-	metrics := []collector.Metrics{
+	tests := []struct {
+		name          string
+		setupServer   func() (*httptest.Server, *int)
+		metrics       []collector.Metrics
+		encryptionKey string
+		expectedError string
+		expectedCalls int
+		expectedLog   string
+	}{
 		{
-			Timestamp: time.Now(),
-			Category:  "system",
-			Name:      "cpu",
-			Value:     45.67,
+			name: "successful unencrypted request",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "",
+			expectedCalls: 1,
+		},
+		{
+			name: "successful unencrypted large request with compression",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "",
+			expectedCalls: 1,
+		},
+		{
+			name: "successful encrypted small request",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "12345678901234567890123456789012",
+			expectedError: "",
+			expectedCalls: 1,
+		},
+		{
+			name: "successful encrypted large request with compression",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusOK)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "12345678901234567890123456789012",
+			expectedError: "",
+			expectedCalls: 1,
+		},
+		{
+			name: "encryption not available fallback with compression",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					if calls == 1 {
+						w.WriteHeader(http.StatusPreconditionFailed)
+					} else {
+						w.WriteHeader(http.StatusOK)
+					}
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "12345678901234567890123456789012",
+			expectedError: "",
+			expectedCalls: 2,
+			expectedLog:   "Warning: Encryption not available (requires premium subscription). Falling back to unencrypted transmission.",
+		},
+		{
+			name: "server error",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusInternalServerError)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "API request failed with status 500",
+			expectedCalls: 1,
+		},
+		{
+			name: "not found error (404)",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusNotFound)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "FATAL: API request failed with status 404 - Organization or server not found",
+			expectedCalls: 1,
+		},
+		{
+			name: "unauthorized error (401)",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusUnauthorized)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "FATAL: API request failed with status 401 - Invalid application token",
+			expectedCalls: 1,
+		},
+		{
+			name: "invalid encryption key",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusBadRequest)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "invalid-key-length",
+			expectedError: "invalid encryption key: encryption key must be exactly 32 bytes long",
+			expectedCalls: 0,
 		},
 	}
 
-	if err := sender.Send(metrics); err != nil {
-		t.Errorf("Send() error = %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear log buffer
+			ml.buffer.Reset()
+
+			server, calls := tt.setupServer()
+			defer server.Close()
+
+			restartChan := make(chan struct{}, 1)
+			sender := NewAPISender(
+				server.URL,
+				"test-project",
+				"test-server",
+				"test-token",
+				"test-machine",
+				tt.encryptionKey,
+				"", // no config path needed
+				restartChan,
+			)
+
+			err := sender.Send(tt.metrics)
+			if (err != nil) != (tt.expectedError != "") {
+				t.Errorf("Send() error = %v, wantErr %v", err, tt.expectedError != "")
+			}
+
+			if err != nil && !strings.Contains(err.Error(), tt.expectedError) {
+				t.Errorf("expected error containing %q, got %q", tt.expectedError, err.Error())
+			}
+
+			if *calls != tt.expectedCalls {
+				t.Errorf("expected %d API calls, got %d", tt.expectedCalls, *calls)
+			}
+
+			// Check for expected log message
+			if tt.expectedLog != "" && !strings.Contains(ml.buffer.String(), tt.expectedLog) {
+				t.Errorf("expected log message %q, got %q", tt.expectedLog, ml.buffer.String())
+			}
+		})
 	}
 }
 
@@ -433,6 +646,87 @@ func TestAPISender_SendWithContext(t *testing.T) {
 			expectedError:  "invalid encryption key: encryption key must be exactly 32 bytes long",
 			expectedCalls:  0,
 			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name: "too many metrics error (413)",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusRequestEntityTooLarge)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "WARNING: API request failed with status 413 - Too many metrics for your plan",
+			expectedCalls: 1,
+		},
+		{
+			name: "rate limit error (429) without header",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusTooManyRequests)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "WARNING: API request failed with status 429 - Rate limit exceeded",
+			expectedCalls: 1,
+		},
+		{
+			name: "rate limit error (429) with header",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.Header().Set("X-Rate-Limit", "60")
+					w.WriteHeader(http.StatusTooManyRequests)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "WARNING: API request failed with status 429 - Rate limit exceeded, recommended interval: 60 seconds",
+			expectedCalls: 1,
+		},
+		{
+			name: "service unavailable error (503)",
+			setupServer: func() (*httptest.Server, *int) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.WriteHeader(http.StatusServiceUnavailable)
+				}))
+				return server, &calls
+			},
+			metrics: []collector.Metrics{{
+				Timestamp: time.Now(),
+				Category:  "system",
+				Name:      "cpu",
+				Value:     45.67,
+			}},
+			encryptionKey: "",
+			expectedError: "WARNING: API request failed with status 503 - Server is undergoing maintenance",
+			expectedCalls: 1,
 		},
 	}
 
@@ -1024,5 +1318,115 @@ func TestAPISender_ConfigAutoUpdate(t *testing.T) {
 				t.Errorf("expected log message %q, got %q", tt.expectedLog, ml.buffer.String())
 			}
 		})
+	}
+}
+
+func TestAPISender_UpdateSendIntervalInConfig(t *testing.T) {
+	// Setup mock logger
+	ml := &mockLogger{}
+	originalLogger := logger.GetDefaultLogger()
+	logger.SetDefaultLogger(ml)
+	defer logger.SetDefaultLogger(originalLogger)
+
+	// Create a temporary config file
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+	configContent := `api:
+  url: "https://api.example.com"
+  organization_id: "test-org"
+  server_id: "test-server"
+  application_token: "test-token"
+machine_name: "test-machine"
+sender:
+  target: "api"
+  send_interval: "10s"
+logging:
+  file_path: "/tmp/app.log"
+collection:
+  cpu:
+    enabled: true
+    interval: "1s"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to create test config file: %v", err)
+	}
+
+	// Create a channel to receive restart signals
+	restartChan := make(chan struct{}, 1)
+
+	// Create the API sender
+	sender := NewAPISender(
+		"https://api.example.com",
+		"test-org",
+		"test-server",
+		"test-token",
+		"test-machine",
+		"",
+		configPath,
+		restartChan,
+	)
+
+	// Test updating the send interval
+	err := sender.updateSendIntervalInConfig("60")
+	if err != nil {
+		t.Errorf("updateSendIntervalInConfig() error = %v", err)
+	}
+
+	// Read the updated config file
+	updatedConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("Failed to read updated config file: %v", err)
+	}
+
+	// Check if the send_interval was updated
+	if !strings.Contains(string(updatedConfig), "send_interval: 60s") {
+		t.Errorf("send_interval was not updated correctly, got: %s", string(updatedConfig))
+	}
+
+	// Check if restart was signaled
+	select {
+	case <-restartChan:
+		// Expected
+	default:
+		t.Error("Restart signal was not sent")
+	}
+
+	// Test with invalid rate limit
+	err = sender.updateSendIntervalInConfig("invalid")
+	if err == nil {
+		t.Error("updateSendIntervalInConfig() expected error for invalid rate limit")
+	}
+
+	// Test with missing send_interval in config
+	invalidConfigPath := filepath.Join(tempDir, "invalid_config.yaml")
+	invalidConfig := `api:
+  url: "https://api.example.com"
+  organization_id: "test-org"
+  server_id: "test-server"
+  application_token: "test-token"
+machine_name: "test-machine"
+sender:
+  target: "api"
+logging:
+  file_path: "/tmp/app.log"
+`
+	if err := os.WriteFile(invalidConfigPath, []byte(invalidConfig), 0644); err != nil {
+		t.Fatalf("Failed to create invalid test config file: %v", err)
+	}
+
+	invalidSender := NewAPISender(
+		"https://api.example.com",
+		"test-org",
+		"test-server",
+		"test-token",
+		"test-machine",
+		"",
+		invalidConfigPath,
+		restartChan,
+	)
+
+	err = invalidSender.updateSendIntervalInConfig("60")
+	if err == nil {
+		t.Error("updateSendIntervalInConfig() expected error for missing send_interval")
 	}
 }

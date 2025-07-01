@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -560,7 +561,18 @@ func sendRoutine(ctx context.Context, metricSender sender.Sender, metricsChan ch
 			// Try to send any remaining metrics before shutting down
 			if len(allMetrics) > 0 {
 				if err := metricSender.Send(allMetrics); err != nil {
-					logger.Printf("Error sending final metrics: %v", err)
+					// Check if this is a fatal error
+					if strings.Contains(err.Error(), "FATAL:") {
+						logger.Printf("Fatal error encountered: %v", err)
+						logger.Printf("Shutting down probe service due to fatal error")
+						os.Exit(1)
+					} else if strings.Contains(err.Error(), "WARNING:") {
+						// Warning error - log but continue
+						logger.Printf("Warning: %v", err)
+					} else {
+						// Non-fatal error - log and continue
+						logger.Printf("Error sending final metrics: %v", err)
+					}
 				} else {
 					logger.Printf("Sent %d final metrics", len(allMetrics))
 				}
@@ -572,7 +584,18 @@ func sendRoutine(ctx context.Context, metricSender sender.Sender, metricsChan ch
 		case <-ticker.C:
 			if len(allMetrics) > 0 {
 				if err := metricSender.Send(allMetrics); err != nil {
-					logger.Printf("Error sending metrics: %v", err)
+					// Check if this is a fatal error
+					if strings.Contains(err.Error(), "FATAL:") {
+						logger.Printf("Fatal error encountered: %v", err)
+						logger.Printf("Shutting down probe service due to fatal error")
+						os.Exit(1)
+					} else if strings.Contains(err.Error(), "WARNING:") {
+						// Warning error - log but continue (metrics will be buffered for next attempt)
+						logger.Printf("Warning: %v", err)
+					} else {
+						// Non-fatal error - log and continue (metrics will be buffered for next attempt)
+						logger.Printf("Error sending metrics: %v", err)
+					}
 				} else {
 					logger.Printf("Sent %d metrics", len(allMetrics))
 					// Clear metrics after successful send

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	goversion "github.com/hashicorp/go-version"
@@ -31,7 +32,8 @@ var (
 	getArch = func() string { return runtime.GOARCH }
 
 	// osExit is a variable to allow mocking os.Exit in tests
-	osExit = os.Exit
+	osExit     = os.Exit
+	osExitLock sync.RWMutex
 
 	// updateCheckInterval is the interval between update checks
 	updateCheckInterval = 24 * time.Hour
@@ -349,7 +351,10 @@ func StartUpdateChecker(ctx context.Context, nextCheck time.Time, retryDelay tim
 					}
 					log.Println("Update successful. Restarting...")
 					// Exit with success code to allow service manager to restart
-					osExit(0)
+					osExitLock.RLock()
+					exitFunc := osExit
+					osExitLock.RUnlock()
+					exitFunc(0)
 				} else {
 					log.Println("No updates available")
 				}

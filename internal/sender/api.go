@@ -193,7 +193,30 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 
 	// Check response status
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("API request failed with status %d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusNotFound: // 404
+			return fmt.Errorf("FATAL: API request failed with status 404 - Organization or server not found")
+		case http.StatusUnauthorized: // 401
+			return fmt.Errorf("FATAL: API request failed with status 401 - Invalid application token")
+		case http.StatusRequestEntityTooLarge: // 413
+			return fmt.Errorf("WARNING: API request failed with status 413 - Too many metrics for your plan, some metrics were ignored")
+		case http.StatusTooManyRequests: // 429
+			// Check for rate limit header
+			if rateLimitHeader := resp.Header.Get("X-Rate-Limit"); rateLimitHeader != "" {
+				// Try to parse the rate limit as seconds
+				if s.configPath != "" && s.restartChan != nil {
+					if err := s.updateSendIntervalInConfig(rateLimitHeader); err != nil {
+						logger.GetDefaultLogger().Printf("Failed to update send interval in config: %v", err)
+					}
+				}
+				return fmt.Errorf("WARNING: API request failed with status 429 - Rate limit exceeded, recommended interval: %s seconds", rateLimitHeader)
+			}
+			return fmt.Errorf("WARNING: API request failed with status 429 - Rate limit exceeded")
+		case http.StatusServiceUnavailable: // 503
+			return fmt.Errorf("WARNING: API request failed with status 503 - Server is undergoing maintenance, metrics will be buffered")
+		default:
+			return fmt.Errorf("API request failed with status %d", resp.StatusCode)
+		}
 	}
 
 	return nil
@@ -265,4 +288,72 @@ func parseConfigTimestamp(ts string) (time.Time, error) {
 		return unix, nil
 	}
 	return time.Time{}, fmt.Errorf("invalid timestamp format: %s", ts)
+}
+
+// updateSendIntervalInConfig updates the send_interval in the config file based on the rate limit
+func (s *APISender) updateSendIntervalInConfig(rateLimitStr string) error {
+	// Parse the rate limit as seconds to validate the format
+	_, err := time.ParseDuration(rateLimitStr + "s")
+	if err != nil {
+		return fmt.Errorf("invalid rate limit format: %w", err)
+	}
+
+	// Read the current config file
+	data, err := os.ReadFile(s.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Convert to string for easier manipulation
+	configStr := string(data)
+
+	// Look for the send_interval line in the sender section
+	senderSectionFound := false
+	sendIntervalFound := false
+	lines := strings.Split(configStr, "\n")
+
+	for i, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+
+		if trimmedLine == "sender:" {
+			senderSectionFound = true
+			continue
+		}
+
+		if senderSectionFound && strings.Contains(trimmedLine, "send_interval:") {
+			// Preserve the original indentation and replace only the value
+			indentMatch := strings.Index(line, "send_interval:")
+			if indentMatch >= 0 {
+				indent := line[:indentMatch]
+				lines[i] = indent + "send_interval: " + rateLimitStr + "s"
+				sendIntervalFound = true
+				break
+			}
+		}
+
+		// If we've moved past the sender section (line with no indentation and not empty), stop looking
+		if senderSectionFound && len(line) > 0 && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && trimmedLine != "" {
+			break
+		}
+	}
+
+	// If we didn't find the send_interval line, log a warning
+	if !sendIntervalFound {
+		return fmt.Errorf("could not find send_interval in config file")
+	}
+
+	// Write the updated config back to the file
+	err = os.WriteFile(s.configPath, []byte(strings.Join(lines, "\n")), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write updated config: %w", err)
+	}
+
+	// Signal a restart to apply the new config
+	logger.GetDefaultLogger().Printf("Updated send_interval in config to %s, triggering restart...", rateLimitStr+"s")
+	select {
+	case s.restartChan <- struct{}{}:
+	default:
+	}
+
+	return nil
 }

@@ -437,7 +437,6 @@ func TestStartUpdateChecker(t *testing.T) {
 	// Save original values
 	originalCheckInterval := updateCheckInterval
 	originalRetryDelay := updateRetryDelay
-	originalExit := osExit
 	originalVersion := Version
 	originalGetOS := getOS
 	originalDownloadBinary := downloadBinaryFunc
@@ -445,7 +444,6 @@ func TestStartUpdateChecker(t *testing.T) {
 	defer func() {
 		updateCheckInterval = originalCheckInterval
 		updateRetryDelay = originalRetryDelay
-		osExit = originalExit
 		Version = originalVersion
 		getOS = originalGetOS
 		downloadBinaryFunc = originalDownloadBinary
@@ -459,11 +457,22 @@ func TestStartUpdateChecker(t *testing.T) {
 	// Set current version to an older version
 	Version = "v1.0.0"
 
-	// Mock os.Exit
-	exitCalled := false
+	// Mock os.Exit with proper synchronization
+	exitCalled := make(chan bool, 1)
+	osExitLock.Lock()
+	originalExit := osExit
 	osExit = func(code int) {
-		exitCalled = true
+		select {
+		case exitCalled <- true:
+		default:
+		}
 	}
+	osExitLock.Unlock()
+	defer func() {
+		osExitLock.Lock()
+		osExit = originalExit
+		osExitLock.Unlock()
+	}()
 
 	// Mock OS check to return Linux
 	getOS = func() string {
@@ -511,22 +520,24 @@ func TestStartUpdateChecker(t *testing.T) {
 
 	// Create a context with cancel
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Start the update checker with next check in 10ms
 	nextCheck := time.Now().Add(10 * time.Millisecond)
 	StartUpdateChecker(ctx, nextCheck, 1*time.Millisecond)
 
-	// Wait for a short period to allow the checker to run
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the exit call or timeout
+	select {
+	case <-exitCalled:
+		// Success: update checker attempted to restart
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Update checker did not attempt to restart after update within timeout")
+	}
 
 	// Cancel the context to stop the checker
 	cancel()
 
-	// Verify that the update checker attempted to update
-	if !exitCalled {
-		t.Error("Update checker did not attempt to restart after update")
-	}
+	// Give a short time for the goroutine to respond to cancellation
+	time.Sleep(10 * time.Millisecond)
 }
 
 // Helper function to check if a string contains another string
@@ -1047,24 +1058,24 @@ func TestStartUpdateCheckerErrorCases(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		setupMocks func()
+		setupMocks func() *httptest.Server
 		wantRetry  bool
 	}{
 		{
 			name: "update check fails with retry",
-			setupMocks: func() {
+			setupMocks: func() *httptest.Server {
 				Version = "v1.0.0"
 				// Create a server that always returns an error
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.WriteHeader(http.StatusInternalServerError)
 				}))
-				GitHubAPIReleaseURL = server.URL
+				return server
 			},
 			wantRetry: true,
 		},
 		{
 			name: "update fails with retry",
-			setupMocks: func() {
+			setupMocks: func() *httptest.Server {
 				Version = "v1.0.0"
 				// Create a server that returns a newer version
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1082,11 +1093,11 @@ func TestStartUpdateCheckerErrorCases(t *testing.T) {
 					}
 					json.NewEncoder(w).Encode(response)
 				}))
-				GitHubAPIReleaseURL = server.URL
 				// Mock download to fail
 				downloadBinaryFunc = func(url string) (string, error) {
 					return "", fmt.Errorf("download failed")
 				}
+				return server
 			},
 			wantRetry: true,
 		},
@@ -1094,7 +1105,10 @@ func TestStartUpdateCheckerErrorCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.setupMocks()
+			server := tt.setupMocks()
+			defer server.Close()
+
+			GitHubAPIReleaseURL = server.URL
 
 			// Create a context with cancel
 			ctx, cancel := context.WithCancel(context.Background())
@@ -1109,6 +1123,9 @@ func TestStartUpdateCheckerErrorCases(t *testing.T) {
 
 			// Cancel the context to stop the checker
 			cancel()
+
+			// Give time for the goroutine to stop
+			time.Sleep(10 * time.Millisecond)
 
 			// The test passes if it doesn't hang or crash
 		})

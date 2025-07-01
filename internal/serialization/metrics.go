@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"reflect"
 
 	"github.com/monitorly-app/probe/internal/collector"
 )
@@ -22,20 +21,9 @@ func SerializeMetricsIndented(metrics []collector.Metrics) ([]byte, error) {
 
 // SerializeMetricIndented converts a single metric to a pretty-printed JSON byte array
 func SerializeMetricIndented(metric collector.Metrics) ([]byte, error) {
-	// Add debug info about the metric
-	valueType := reflect.TypeOf(metric.Value)
-	log.Printf("DEBUG: Serializing metric: name=%s, value type=%v", metric.Name, valueType)
-
 	jsonData, err := json.MarshalIndent(metric, "", "  ")
 	if err != nil {
 		log.Printf("ERROR: Failed to marshal metric %s: %v", metric.Name, err)
-	} else {
-		// Log the first 100 chars of the serialized data
-		preview := string(jsonData)
-		if len(preview) > 100 {
-			preview = preview[:100] + "..."
-		}
-		log.Printf("DEBUG: Serialized data preview: %s", preview)
 	}
 
 	return jsonData, err
@@ -43,8 +31,6 @@ func SerializeMetricIndented(metric collector.Metrics) ([]byte, error) {
 
 // WriteMetricsTo writes serialized metrics to the provided writer
 func WriteMetricsTo(w io.Writer, metrics []collector.Metrics, indent bool) error {
-	log.Printf("DEBUG: Writing %d metrics to output", len(metrics))
-
 	// For empty metrics, always write an empty array with a newline
 	if len(metrics) == 0 {
 		if _, err := io.WriteString(w, "[]\n"); err != nil {
