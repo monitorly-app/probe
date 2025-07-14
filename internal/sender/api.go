@@ -145,6 +145,7 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.applicationToken)
+	req.Header.Set("User-Agent", "Monitorly-Probe/v1.0.0")
 	if isCompressed {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
@@ -188,6 +189,7 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 		// Set headers
 		fallbackReq.Header.Set("Content-Type", "application/json")
 		fallbackReq.Header.Set("Authorization", "Bearer "+s.applicationToken)
+		fallbackReq.Header.Set("User-Agent", "Monitorly-Probe/v1.0.0")
 		if fallbackIsCompressed {
 			fallbackReq.Header.Set("Content-Encoding", "gzip")
 		}
@@ -265,6 +267,7 @@ func (s *APISender) checkConfigUpdate(resp *http.Response) {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+s.applicationToken)
+	req.Header.Set("User-Agent", "Monitorly-Probe/v1.0.0")
 	resp2, err := s.client.Do(req)
 	if err != nil {
 		logger.GetDefaultLogger().Printf("Failed to fetch latest config: %v", err)
@@ -394,6 +397,7 @@ func (s *APISender) SendConfigValidation(configPath string) error {
 	// Set headers
 	req.Header.Set("Content-Type", "application/x-yaml")
 	req.Header.Set("Authorization", "Bearer "+s.applicationToken)
+	req.Header.Set("User-Agent", "Monitorly-Probe/v1.0.0")
 
 	// Send request
 	resp, err := s.client.Do(req)
