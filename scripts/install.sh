@@ -57,7 +57,7 @@ GITHUB_API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/lat
 
 # Installation paths
 INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="${HOME}/.monitorly"
+CONFIG_DIR="/etc/monitorly"
 SERVICE_DIR=""
 
 # Print with colors
@@ -155,8 +155,15 @@ detect_platform() {
     aarch64|arm64)
       ARCH="arm64"
       ;;
+    armv7l)
+      ARCH="arm"
+      ;;
+    armv6l)
+      ARCH="arm"
+      ;;
     *)
-      error "Unsupported architecture: $ARCH"
+      info "Architecture detected: $ARCH (will attempt to compile from source)"
+      COMPILE_FROM_SOURCE=true
       ;;
   esac
 
@@ -164,8 +171,104 @@ detect_platform() {
   info "Architecture: ${ARCH}, Init system: ${INIT_SYSTEM}"
 }
 
+# Install Go if needed for compilation
+install_go() {
+  info "Installing Go for compilation..."
+  
+  # Detect Go architecture
+  GO_ARCH=$(uname -m)
+  case "$GO_ARCH" in
+    x86_64) GO_ARCH="amd64" ;;
+    aarch64|arm64) GO_ARCH="arm64" ;;
+    armv7l) GO_ARCH="armv6l" ;;
+    armv6l) GO_ARCH="armv6l" ;;
+    *) GO_ARCH="amd64" ;;
+  esac
+  
+  # Download and install Go
+  GO_VERSION="1.21.0"
+  GO_URL="https://golang.org/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
+  
+  info "Downloading Go ${GO_VERSION} for ${GO_ARCH}..."
+  
+  if ! curl -L -o /tmp/go.tar.gz "$GO_URL"; then
+    error "Failed to download Go"
+  fi
+  
+  # Install Go
+  if [ "$USE_SUDO" = true ]; then
+    sudo rm -rf /usr/local/go
+    sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+  else
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf /tmp/go.tar.gz
+  fi
+  
+  rm /tmp/go.tar.gz
+  
+  # Add Go to PATH
+  export PATH="/usr/local/go/bin:$PATH"
+  
+  success "Go installed successfully"
+}
+
+# Compile from source
+compile_from_source() {
+  info "Compiling from source..."
+  
+  # Check if Go is installed
+  if ! command -v go >/dev/null 2>&1; then
+    install_go
+  else
+    export PATH="/usr/local/go/bin:$PATH"
+  fi
+  
+  # Create temp directory
+  TEMP_DIR=$(mktemp -d)
+  cd "$TEMP_DIR"
+  
+  # Download source code
+  info "Downloading source code..."
+  if ! curl -L -o probe.tar.gz "https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/master.tar.gz"; then
+    error "Failed to download source code"
+  fi
+  
+  # Extract and compile
+  tar -xzf probe.tar.gz
+  cd probe-master
+  
+  info "Compiling..."
+  export CGO_ENABLED=0
+  export GOOS=linux
+  
+  if ! go build -o monitorly-probe ./cmd/probe; then
+    error "Compilation failed"
+  fi
+  
+  # Install binary
+  if [ "$USE_SUDO" = true ]; then
+    sudo mv monitorly-probe /usr/local/bin/monitorly-probe
+    sudo chmod +x /usr/local/bin/monitorly-probe
+  else
+    mv monitorly-probe /usr/local/bin/monitorly-probe
+    chmod +x /usr/local/bin/monitorly-probe
+  fi
+  
+  # Clean up
+  cd /
+  rm -rf "$TEMP_DIR"
+  
+  success "Compilation and installation completed"
+}
+
 # Get the latest release version and download URL
 get_latest_release() {
+  # If compilation is needed, skip download
+  if [ "$COMPILE_FROM_SOURCE" = true ]; then
+    info "Will compile from source due to architecture"
+    return
+  fi
+  
   # If version is specified, use it directly
   if [ -n "$SPECIFIED_VERSION" ]; then
     VERSION="$SPECIFIED_VERSION"
@@ -186,7 +289,9 @@ get_latest_release() {
     VERSION="${VERSION#v}" # Remove leading 'v'
 
     if [ -z "$VERSION" ]; then
-      warning "Could not determine the latest version from GitHub API. Using fallback method..."
+      warning "Could not determine the latest version from GitHub API. Will compile from source..."
+      COMPILE_FROM_SOURCE=true
+      return
     else
       info "Latest version: ${VERSION}"
 
@@ -198,33 +303,36 @@ get_latest_release() {
         info "Download URL: ${DOWNLOAD_URL}"
         return
       else
-        warning "Could not find download URL for linux-${ARCH} via API. Using fallback method..."
+        warning "Could not find download URL for linux-${ARCH}. Will compile from source..."
+        COMPILE_FROM_SOURCE=true
+        return
       fi
     fi
   else
-    warning "Failed to fetch latest release data from GitHub API. Using fallback method..."
+    warning "Failed to fetch latest release data from GitHub API. Will compile from source..."
+    COMPILE_FROM_SOURCE=true
+    return
   fi
-
-  # Fallback: Use a hardcoded version as a last resort
-  # This should be updated periodically when releasing new versions
-  FALLBACK_VERSION="0.1.0"
-  VERSION="${FALLBACK_VERSION}"
-  info "Using fallback version: ${VERSION}"
-
-  # Construct the download URL directly
-  DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${VERSION}/monitorly-probe-${VERSION}-linux-${ARCH}"
-  info "Fallback download URL: ${DOWNLOAD_URL}"
 }
 
 # Download and install the binary
 download_and_install() {
+  # If we need to compile from source
+  if [ "$COMPILE_FROM_SOURCE" = true ]; then
+    compile_from_source
+    return
+  fi
+  
   info "Downloading Monitorly Probe ${VERSION}..."
 
   TEMP_DIR=$(mktemp -d)
   TEMP_FILE="${TEMP_DIR}/monitorly-probe"
 
   if ! curl -L -s "${DOWNLOAD_URL}" -o "${TEMP_FILE}"; then
-    error "Failed to download the binary."
+    warning "Failed to download binary. Will compile from source..."
+    COMPILE_FROM_SOURCE=true
+    compile_from_source
+    return
   fi
 
   info "Installing to ${INSTALL_DIR}..."
@@ -254,82 +362,21 @@ download_and_install() {
   success "Monitorly Probe v${VERSION} installed to ${INSTALL_DIR}/monitorly-probe"
 }
 
-# Download the example config file
-download_config() {
+# Create config directory and basic structure
+setup_config() {
   info "Setting up configuration directory..."
 
-  mkdir -p "${CONFIG_DIR}"
-
-  # Try to get the example config
-  # First try with the exact version tag
-  CONFIG_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/v${VERSION}/config.yaml.example"
-  info "Downloading example config from: ${CONFIG_URL}"
-
-  if curl -s -f "${CONFIG_URL}" -o "${CONFIG_DIR}/config.yaml"; then
-    success "Configuration file saved to ${CONFIG_DIR}/config.yaml"
+  if [ "$USE_SUDO" = true ]; then
+    sudo mkdir -p "${CONFIG_DIR}"
+    sudo mkdir -p "/var/log/monitorly"
+    sudo mkdir -p "/var/lib/monitorly"
   else
-    # Fall back to the main branch if version-specific file isn't available
-    CONFIG_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/config.yaml.example"
-    info "Version-specific config not found. Trying from main branch: ${CONFIG_URL}"
-
-    if curl -s -f "${CONFIG_URL}" -o "${CONFIG_DIR}/config.yaml"; then
-      success "Configuration file saved to ${CONFIG_DIR}/config.yaml from main branch"
-    else
-      warning "Could not download example config. Creating a minimal one instead."
-      cat > "${CONFIG_DIR}/config.yaml" << EOF
-# Monitorly Probe Configuration
-
-# Optional machine name for identifying this server in metrics
-# If not specified, the system hostname will be used
-# machine_name: "my-server"
-
-collection:
-  # CPU metrics collection settings
-  cpu:
-    enabled: true
-    interval: 30s
-
-  # RAM metrics collection settings
-  ram:
-    enabled: true
-    interval: 30s
-
-  # Disk metrics collection settings
-  disk:
-    enabled: true
-    interval: 60s
-    mount_points:
-      - path: "/"
-        label: "root"
-        collect_usage: true
-        collect_percent: true
-
-# Sender configuration
-sender:
-  target: "log_file"  # Change to "api" to send to API
-  send_interval: 5m
-
-# API configuration (required if sender.target is "api")
-api:
-  url: "https://api.monitorly.io"
-  organization_id: "YOUR_ORGANIZATION_ID"
-  server_id: "YOUR_SERVER_ID"
-  application_token: "YOUR_APPLICATION_TOKEN"
-
-# Log file configuration (used if sender.target is "log_file")
-log_file:
-  path: "${CONFIG_DIR}/metrics.log"
-
-# Application logging configuration
-logging:
-  file_path: "${CONFIG_DIR}/monitorly.log"
-EOF
-      success "Created default configuration file at ${CONFIG_DIR}/config.yaml"
-    fi
+    mkdir -p "${CONFIG_DIR}"
+    mkdir -p "/var/log/monitorly"
+    mkdir -p "/var/lib/monitorly"
   fi
 
-  # Create logging directories
-  mkdir -p "${CONFIG_DIR}/logs"
+  success "Configuration directories created"
 }
 
 # Set up system service based on the detected init system
@@ -345,14 +392,27 @@ setup_service() {
       # Create service file content
       SERVICE_CONTENT="[Unit]
 Description=Monitorly Probe - System Monitoring Agent
+Documentation=https://github.com/monitorly-app/probe
 After=network.target
+Wants=network.target
 
 [Service]
-ExecStart=${INSTALL_DIR}/monitorly-probe
+Type=simple
+User=root
+Group=root
+ExecStart=${INSTALL_DIR}/monitorly-probe -config ${CONFIG_DIR}/config.yaml
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
-# Consider creating a dedicated user for security
-# User=monitorly
-# Group=monitorly
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=monitorly-probe
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/monitorly /var/lib/monitorly ${CONFIG_DIR}
 
 [Install]
 WantedBy=multi-user.target"
@@ -392,11 +452,12 @@ DESC=\"Monitorly Probe\"
 NAME=monitorly-probe
 DAEMON=${INSTALL_DIR}/monitorly-probe
 PIDFILE=/var/run/\$NAME.pid
+DAEMON_ARGS=\"-config ${CONFIG_DIR}/config.yaml\"
 
 case \"\$1\" in
   start)
     echo \"Starting \$DESC\"
-    start-stop-daemon --start --background --make-pidfile --pidfile \$PIDFILE --exec \$DAEMON
+    start-stop-daemon --start --background --make-pidfile --pidfile \$PIDFILE --exec \$DAEMON -- \$DAEMON_ARGS
     ;;
   stop)
     echo \"Stopping \$DESC\"
@@ -455,68 +516,7 @@ exit 0"
 
     *)
       warning "Automatic service installation is not supported for your system."
-      info "You can run the probe manually with: ${INSTALL_DIR}/monitorly-probe"
-      ;;
-  esac
-}
-
-# Set up distribution-specific configurations
-setup_distro_specific() {
-  case "$DISTRO_FAMILY" in
-    redhat)
-      info "Setting up Red Hat family specific configurations..."
-
-      # For SELinux systems, set the proper context
-      if command -v sestatus >/dev/null 2>&1 && sestatus | grep -q "SELinux status: *enabled"; then
-        if [ "$USE_SUDO" = true ]; then
-          info "SELinux detected, setting appropriate context"
-          sudo chcon -t bin_t "${INSTALL_DIR}/monitorly-probe"
-        fi
-      fi
-
-      # Create logrotate configuration
-      if [ -d /etc/logrotate.d ]; then
-        LOGROTATE_CONFIG="/etc/logrotate.d/monitorly-probe"
-        LOGROTATE_CONTENT="${CONFIG_DIR}/logs/*.log {
-    weekly
-    missingok
-    rotate 7
-    compress
-    delaycompress
-    notifempty
-    create 0640 root root
-}"
-        if [ "$USE_SUDO" = true ]; then
-          echo "${LOGROTATE_CONTENT}" | sudo tee "${LOGROTATE_CONFIG}" > /dev/null
-          success "Created logrotate configuration"
-        fi
-      fi
-      ;;
-
-    debian)
-      info "Setting up Debian family specific configurations..."
-
-      # Create logrotate configuration
-      if [ -d /etc/logrotate.d ]; then
-        LOGROTATE_CONFIG="/etc/logrotate.d/monitorly-probe"
-        LOGROTATE_CONTENT="${CONFIG_DIR}/logs/*.log {
-    weekly
-    missingok
-    rotate 7
-    compress
-    delaycompress
-    notifempty
-    create 0640 root root
-}"
-        if [ "$USE_SUDO" = true ]; then
-          echo "${LOGROTATE_CONTENT}" | sudo tee "${LOGROTATE_CONFIG}" > /dev/null
-          success "Created logrotate configuration"
-        fi
-      fi
-      ;;
-
-    *)
-      info "No distribution-specific configurations to apply"
+      info "You can run the probe manually with: ${INSTALL_DIR}/monitorly-probe -config ${CONFIG_DIR}/config.yaml"
       ;;
   esac
 }
@@ -529,14 +529,9 @@ show_instructions() {
   echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
   echo
   echo -e "The probe has been installed to: ${BLUE}${INSTALL_DIR}/monitorly-probe${NC}"
-  echo -e "Configuration file: ${BLUE}${CONFIG_DIR}/config.yaml${NC}"
+  echo -e "Configuration will be at: ${BLUE}${CONFIG_DIR}/config.yaml${NC}"
   echo
-  echo -e "${YELLOW}IMPORTANT:${NC} Before starting the service, please review and edit your configuration:"
-  echo -e "  ${BLUE}vim ${CONFIG_DIR}/config.yaml${NC}"
-  echo
-  echo -e "Specifically, if you want to send metrics to the Monitorly API, edit these settings:"
-  echo -e "  1. Change ${BLUE}sender.target${NC} to ${BLUE}\"api\"${NC}"
-  echo -e "  2. Set your ${BLUE}api.organization_id${NC} and ${BLUE}api.application_token${NC}"
+  echo -e "${YELLOW}IMPORTANT:${NC} The configuration file will be created by the installation script."
   echo
 
   # Display service-specific instructions
@@ -546,19 +541,19 @@ show_instructions() {
       echo -e "  ${BLUE}sudo systemctl start monitorly-probe${NC}   # Start the service"
       echo -e "  ${BLUE}sudo systemctl stop monitorly-probe${NC}    # Stop the service"
       echo -e "  ${BLUE}sudo systemctl status monitorly-probe${NC}  # Check status"
-      echo -e "  ${BLUE}sudo journalctl -u monitorly-probe${NC}     # View logs"
+      echo -e "  ${BLUE}sudo journalctl -u monitorly-probe -f${NC}  # View logs"
       ;;
     sysv)
       echo -e "To manage the Monitorly Probe service:"
       echo -e "  ${BLUE}sudo service monitorly-probe start${NC}    # Start the service"
       echo -e "  ${BLUE}sudo service monitorly-probe stop${NC}     # Stop the service"
       echo -e "  ${BLUE}sudo service monitorly-probe status${NC}   # Check status"
-      echo -e "  ${BLUE}tail -f ${CONFIG_DIR}/logs/monitorly.log${NC} # View logs"
+      echo -e "  ${BLUE}tail -f /var/log/monitorly/monitorly.log${NC} # View logs"
       ;;
     *)
       echo -e "To run Monitorly Probe manually:"
-      echo -e "  ${BLUE}${INSTALL_DIR}/monitorly-probe${NC}"
-      echo -e "Log files will be created in: ${BLUE}${CONFIG_DIR}/logs/${NC}"
+      echo -e "  ${BLUE}${INSTALL_DIR}/monitorly-probe -config ${CONFIG_DIR}/config.yaml${NC}"
+      echo -e "Log files will be created in: ${BLUE}/var/log/monitorly/${NC}"
       ;;
   esac
 
@@ -579,9 +574,8 @@ main() {
   detect_platform
   get_latest_release
   download_and_install
-  download_config
+  setup_config
   setup_service
-  setup_distro_specific
   show_instructions
 }
 
