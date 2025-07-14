@@ -67,12 +67,23 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 	} else {
 		url = fmt.Sprintf("%s/api/%s/servers/%s/metrics", s.baseURL, s.organizationID, s.serverID)
 	}
+	
+	// DEBUG: Log what we're sending
+	fmt.Printf("DEBUG: Sending to URL: %s\n", url)
+	fmt.Printf("DEBUG: Organization ID: %s\n", s.organizationID)
+	fmt.Printf("DEBUG: Server ID: %s\n", s.serverID)
+	fmt.Printf("DEBUG: Application Token: %s\n", s.applicationToken)
+	fmt.Printf("DEBUG: Is System Info: %v\n", isSystemInfo)
 
 	// Prepare request body
 	requestBody := map[string]interface{}{
 		"machine_name": s.machineName,
 		"metrics":      metrics,
 	}
+	
+	// DEBUG: Log the request body
+	requestBodyJSON, _ := json.MarshalIndent(requestBody, "", "  ")
+	fmt.Printf("DEBUG: Request body: %s\n", string(requestBodyJSON))
 
 	// First try with encryption if a key is provided
 	var requestData []byte
@@ -193,6 +204,11 @@ func (s *APISender) SendWithContext(ctx context.Context, metrics []collector.Met
 
 	// Check response status
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// DEBUG: Log the response
+		responseBody, _ := io.ReadAll(resp.Body)
+		fmt.Printf("DEBUG: Response status: %d\n", resp.StatusCode)
+		fmt.Printf("DEBUG: Response body: %s\n", string(responseBody))
+		
 		switch resp.StatusCode {
 		case http.StatusNotFound: // 404
 			return fmt.Errorf("FATAL: API request failed with status 404 - Organization or server not found")
