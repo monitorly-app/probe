@@ -1,450 +1,589 @@
 #!/bin/bash
 
-# Script d'installation Monitorly Probe
-# Compile et installe la probe directement depuis le code source
-
 set -e
 
-echo "🚀 Installation Monitorly Probe..."
+# Colors for pretty output
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
 
-# Vérifier les permissions sudo
-if ! sudo -n true 2>/dev/null; then
-    echo "❌ Ce script nécessite les permissions sudo"
-    exit 1
-fi
+# Parse command line arguments
+parse_args() {
+  # Default values
+  SPECIFIED_VERSION=""
 
-# Détecter l'architecture
-ARCH=$(uname -m)
-case $ARCH in
-    x86_64) GOARCH="amd64" ;;
-    aarch64|arm64) GOARCH="arm64" ;;
-    armv7l) GOARCH="arm" ;;
-    armv6l) GOARCH="arm" ;;
-    *) GOARCH="$ARCH" ;;
-esac
-
-echo "📋 Architecture détectée: $ARCH -> Go: $GOARCH"
-
-# Vérifier si Go est installé
-if ! command -v go >/dev/null 2>&1; then
-    echo "🔧 Installation de Go..."
-    
-    # Télécharger Go pour l'architecture détectée
-    GO_VERSION="1.21.0"
-    GO_FILE="go${GO_VERSION}.linux-${GOARCH}.tar.gz"
-    GO_URL="https://golang.org/dl/${GO_FILE}"
-    
-    echo "📥 Téléchargement: $GO_FILE"
-    
-    if command -v curl >/dev/null 2>&1; then
-        curl -L -o /tmp/go.tar.gz "$GO_URL"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -O /tmp/go.tar.gz "$GO_URL"
-    else
-        echo "❌ curl ou wget requis"
+  # Process command line arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -v|--version)
+        SPECIFIED_VERSION="$2"
+        shift 2
+        ;;
+      -h|--help)
+        show_help
+        exit 0
+        ;;
+      *)
+        error "Unknown option: $1"
+        show_help
         exit 1
+        ;;
+    esac
+  done
+
+  if [ -n "$SPECIFIED_VERSION" ]; then
+    info "User specified version: $SPECIFIED_VERSION"
+  fi
+}
+
+# Display help
+show_help() {
+  echo "Monitorly Probe Installer"
+  echo
+  echo "Usage: $0 [options]"
+  echo
+  echo "Options:"
+  echo "  -v, --version VERSION    Install specific version"
+  echo "  -h, --help               Show this help message"
+  echo
+}
+
+# GitHub repository details
+REPO_OWNER="monitorly-app"
+REPO_NAME="probe"
+GITHUB_API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+
+# Installation paths
+INSTALL_DIR="/usr/local/bin"
+CONFIG_DIR="${HOME}/.monitorly"
+SERVICE_DIR=""
+
+# Print with colors
+info() {
+  echo -e "${BLUE}INFO:${NC} $1"
+}
+
+success() {
+  echo -e "${GREEN}SUCCESS:${NC} $1"
+}
+
+warning() {
+  echo -e "${YELLOW}WARNING:${NC} $1"
+}
+
+error() {
+  echo -e "${RED}ERROR:${NC} $1"
+  exit 1
+}
+
+# Check for required commands
+check_dependencies() {
+  info "Checking dependencies..."
+
+  for cmd in curl grep cut tr uname mktemp; do
+    if ! command -v ${cmd} >/dev/null 2>&1; then
+      error "Required command '${cmd}' not found."
     fi
-    
-    # Installer Go
-    sudo rm -rf /usr/local/go
-    sudo tar -C /usr/local -xzf /tmp/go.tar.gz
-    rm /tmp/go.tar.gz
-    
-    # Ajouter Go au PATH
-    export PATH="/usr/local/go/bin:$PATH"
-    echo "✅ Go installé"
-else
-    echo "✅ Go déjà installé: $(go version)"
-fi
+  done
 
-# S'assurer que Go est dans le PATH
-export PATH="/usr/local/go/bin:$PATH"
+  # Check for sudo or root
+  if [ "$(id -u)" -ne 0 ]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+      error "This script requires sudo privileges to install system-wide. Please run as root or install sudo."
+    fi
+    USE_SUDO=true
+  else
+    USE_SUDO=false
+  fi
+}
 
-# Télécharger le code source
-echo "📥 Téléchargement du code source..."
-TEMP_DIR="/tmp/monitorly-build-$$"
-mkdir -p "$TEMP_DIR"
-cd "$TEMP_DIR"
+# Detect Linux distribution and architecture
+detect_platform() {
+  info "Detecting platform..."
 
-# Créer la structure du projet
-cat > go.mod << 'EOF'
-module github.com/monitorly-app/probe
+  # Verify we're running on Linux
+  OS_TYPE=$(uname -s)
+  if [ "$OS_TYPE" != "Linux" ]; then
+    error "This installer only supports Linux. Detected OS: $OS_TYPE"
+  fi
 
-go 1.21
+  # Detect Linux distribution
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO_NAME=$ID
+    DISTRO_VERSION=$VERSION_ID
+    DISTRO_FAMILY=""
 
-require (
-	github.com/shirou/gopsutil/v4 v4.24.0
-	gopkg.in/yaml.v3 v3.0.1
-)
+    # Determine the distribution family
+    case "$DISTRO_NAME" in
+      rhel|centos|fedora|rocky|almalinux)
+        DISTRO_FAMILY="redhat"
+        ;;
+      debian|ubuntu|linuxmint|pop)
+        DISTRO_FAMILY="debian"
+        ;;
+      *)
+        DISTRO_FAMILY="other"
+        ;;
+    esac
+  else
+    DISTRO_NAME="unknown"
+    DISTRO_VERSION="unknown"
+    DISTRO_FAMILY="other"
+  fi
+
+  # Detect init system
+  if command -v systemctl >/dev/null 2>&1; then
+    INIT_SYSTEM="systemd"
+    SERVICE_DIR="/etc/systemd/system"
+  elif command -v service >/dev/null 2>&1; then
+    INIT_SYSTEM="sysv"
+    SERVICE_DIR="/etc/init.d"
+  else
+    warning "Could not detect init system. Service installation will be skipped."
+    INIT_SYSTEM="unknown"
+  fi
+
+  # Detect architecture
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64)
+      ARCH="amd64"
+      ;;
+    aarch64|arm64)
+      ARCH="arm64"
+      ;;
+    *)
+      error "Unsupported architecture: $ARCH"
+      ;;
+  esac
+
+  info "Detected distribution: ${DISTRO_NAME} ${DISTRO_VERSION} (${DISTRO_FAMILY})"
+  info "Architecture: ${ARCH}, Init system: ${INIT_SYSTEM}"
+}
+
+# Get the latest release version and download URL
+get_latest_release() {
+  # If version is specified, use it directly
+  if [ -n "$SPECIFIED_VERSION" ]; then
+    VERSION="$SPECIFIED_VERSION"
+    info "Using specified version: ${VERSION}"
+
+    # Construct the download URL directly
+    DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${VERSION}/monitorly-probe-${VERSION}-linux-${ARCH}"
+    info "Download URL: ${DOWNLOAD_URL}"
+    return
+  fi
+
+  info "Fetching latest release information..."
+
+  # First try to get the latest release from the GitHub API
+  if RELEASE_DATA=$(curl -s -f ${GITHUB_API}); then
+    # Extract version
+    VERSION=$(echo "${RELEASE_DATA}" | grep -o '"tag_name": *"[^"]*"' | grep -o '[^"]*$')
+    VERSION="${VERSION#v}" # Remove leading 'v'
+
+    if [ -z "$VERSION" ]; then
+      warning "Could not determine the latest version from GitHub API. Using fallback method..."
+    else
+      info "Latest version: ${VERSION}"
+
+      # Build asset name pattern (standalone binary)
+      ASSET_PATTERN="monitorly-probe-${VERSION}-linux-${ARCH}"
+
+      # Find the download URL
+      if DOWNLOAD_URL=$(echo "${RELEASE_DATA}" | grep -o "\"browser_download_url\": *\"[^\"]*${ASSET_PATTERN}[^\"]*\"" | grep -o 'http[^\"]*'); then
+        info "Download URL: ${DOWNLOAD_URL}"
+        return
+      else
+        warning "Could not find download URL for linux-${ARCH} via API. Using fallback method..."
+      fi
+    fi
+  else
+    warning "Failed to fetch latest release data from GitHub API. Using fallback method..."
+  fi
+
+  # Fallback: Use a hardcoded version as a last resort
+  # This should be updated periodically when releasing new versions
+  FALLBACK_VERSION="0.1.0"
+  VERSION="${FALLBACK_VERSION}"
+  info "Using fallback version: ${VERSION}"
+
+  # Construct the download URL directly
+  DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${VERSION}/monitorly-probe-${VERSION}-linux-${ARCH}"
+  info "Fallback download URL: ${DOWNLOAD_URL}"
+}
+
+# Download and install the binary
+download_and_install() {
+  info "Downloading Monitorly Probe ${VERSION}..."
+
+  TEMP_DIR=$(mktemp -d)
+  TEMP_FILE="${TEMP_DIR}/monitorly-probe"
+
+  if ! curl -L -s "${DOWNLOAD_URL}" -o "${TEMP_FILE}"; then
+    error "Failed to download the binary."
+  fi
+
+  info "Installing to ${INSTALL_DIR}..."
+
+  # Make executable and move to install dir
+  chmod +x "${TEMP_FILE}"
+
+  if [ "$USE_SUDO" = true ]; then
+    if ! sudo mkdir -p "${INSTALL_DIR}"; then
+      error "Failed to create installation directory."
+    fi
+    if ! sudo mv "${TEMP_FILE}" "${INSTALL_DIR}/monitorly-probe"; then
+      error "Failed to move binary to installation directory."
+    fi
+  else
+    if ! mkdir -p "${INSTALL_DIR}"; then
+      error "Failed to create installation directory."
+    fi
+    if ! mv "${TEMP_FILE}" "${INSTALL_DIR}/monitorly-probe"; then
+      error "Failed to move binary to installation directory."
+    fi
+  fi
+
+  # Clean up temp directory
+  rm -rf "${TEMP_DIR}"
+
+  success "Monitorly Probe v${VERSION} installed to ${INSTALL_DIR}/monitorly-probe"
+}
+
+# Download the example config file
+download_config() {
+  info "Setting up configuration directory..."
+
+  mkdir -p "${CONFIG_DIR}"
+
+  # Try to get the example config
+  # First try with the exact version tag
+  CONFIG_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/v${VERSION}/config.yaml.example"
+  info "Downloading example config from: ${CONFIG_URL}"
+
+  if curl -s -f "${CONFIG_URL}" -o "${CONFIG_DIR}/config.yaml"; then
+    success "Configuration file saved to ${CONFIG_DIR}/config.yaml"
+  else
+    # Fall back to the main branch if version-specific file isn't available
+    CONFIG_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/config.yaml.example"
+    info "Version-specific config not found. Trying from main branch: ${CONFIG_URL}"
+
+    if curl -s -f "${CONFIG_URL}" -o "${CONFIG_DIR}/config.yaml"; then
+      success "Configuration file saved to ${CONFIG_DIR}/config.yaml from main branch"
+    else
+      warning "Could not download example config. Creating a minimal one instead."
+      cat > "${CONFIG_DIR}/config.yaml" << EOF
+# Monitorly Probe Configuration
+
+# Optional machine name for identifying this server in metrics
+# If not specified, the system hostname will be used
+# machine_name: "my-server"
+
+collection:
+  # CPU metrics collection settings
+  cpu:
+    enabled: true
+    interval: 30s
+
+  # RAM metrics collection settings
+  ram:
+    enabled: true
+    interval: 30s
+
+  # Disk metrics collection settings
+  disk:
+    enabled: true
+    interval: 60s
+    mount_points:
+      - path: "/"
+        label: "root"
+        collect_usage: true
+        collect_percent: true
+
+# Sender configuration
+sender:
+  target: "log_file"  # Change to "api" to send to API
+  send_interval: 5m
+
+# API configuration (required if sender.target is "api")
+api:
+  url: "https://api.monitorly.io"
+  organization_id: "YOUR_ORGANIZATION_ID"
+  server_id: "YOUR_SERVER_ID"
+  application_token: "YOUR_APPLICATION_TOKEN"
+
+# Log file configuration (used if sender.target is "log_file")
+log_file:
+  path: "${CONFIG_DIR}/metrics.log"
+
+# Application logging configuration
+logging:
+  file_path: "${CONFIG_DIR}/monitorly.log"
 EOF
+      success "Created default configuration file at ${CONFIG_DIR}/config.yaml"
+    fi
+  fi
 
-# Créer les répertoires nécessaires
-mkdir -p cmd/probe
-mkdir -p internal/config
-mkdir -p internal/collector
-mkdir -p internal/sender
-mkdir -p internal/version
-
-# Créer le fichier main.go minimal
-cat > cmd/probe/main.go << 'EOF'
-package main
-
-import (
-	"context"
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
-	"github.com/monitorly-app/probe/internal/config"
-	"github.com/monitorly-app/probe/internal/collector"
-	"github.com/monitorly-app/probe/internal/sender"
-	"github.com/monitorly-app/probe/internal/version"
-)
-
-func main() {
-	var (
-		configPath = flag.String("config", "/etc/monitorly/config.yaml", "Path to configuration file")
-		showVersion = flag.Bool("version", false, "Show version information")
-		skipUpdate = flag.Bool("skip-update-check", false, "Skip update check")
-	)
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Printf("Monitorly Probe %s\n", version.Version)
-		fmt.Printf("Build Date: %s\n", version.BuildDate)
-		fmt.Printf("Commit: %s\n", version.Commit)
-		return
-	}
-
-	// Load configuration
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Setup signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Create collector and sender
-	c := collector.New(cfg)
-	s := sender.New(cfg)
-
-	// Start collection and sending
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				metrics, err := c.Collect()
-				if err != nil {
-					log.Printf("Collection error: %v", err)
-				} else {
-					if err := s.Send(metrics); err != nil {
-						log.Printf("Send error: %v", err)
-					}
-				}
-				time.Sleep(time.Duration(cfg.Sender.SendInterval) * time.Second)
-			}
-		}
-	}()
-
-	// Wait for signal
-	<-sigChan
-	log.Println("Shutting down...")
-	cancel()
-	time.Sleep(1 * time.Second)
-}
-EOF
-
-# Créer les modules nécessaires (versions simplifiées)
-cat > internal/version/version.go << 'EOF'
-package version
-
-var (
-	Version   = "1.0.0-compiled"
-	BuildDate = "unknown"
-	Commit    = "unknown"
-)
-EOF
-
-cat > internal/config/config.go << 'EOF'
-package config
-
-import (
-	"gopkg.in/yaml.v3"
-	"io/ioutil"
-	"time"
-)
-
-type Config struct {
-	MachineName string `yaml:"machine_name"`
-	Collection  struct {
-		CPU struct {
-			Enabled  bool   `yaml:"enabled"`
-			Interval string `yaml:"interval"`
-		} `yaml:"cpu"`
-		RAM struct {
-			Enabled  bool   `yaml:"enabled"`
-			Interval string `yaml:"interval"`
-		} `yaml:"ram"`
-	} `yaml:"collection"`
-	Sender struct {
-		Target       string `yaml:"target"`
-		SendInterval int    `yaml:"send_interval"`
-	} `yaml:"sender"`
-	API struct {
-		URL              string `yaml:"url"`
-		OrganizationID   string `yaml:"organization_id"`
-		ApplicationToken string `yaml:"application_token"`
-		EncryptionKey    string `yaml:"encryption_key"`
-	} `yaml:"api"`
-	Logging struct {
-		FilePath string `yaml:"file_path"`
-	} `yaml:"logging"`
+  # Create logging directories
+  mkdir -p "${CONFIG_DIR}/logs"
 }
 
-func Load(path string) (*Config, error) {
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+# Set up system service based on the detected init system
+setup_service() {
+  info "Setting up system service..."
 
-	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, err
-	}
+  case "$INIT_SYSTEM" in
+    systemd)
+      info "Creating systemd service..."
+      SERVICE_NAME="monitorly-probe.service"
+      SERVICE_FILE="${SERVICE_DIR}/${SERVICE_NAME}"
 
-	return &config, nil
-}
-EOF
-
-cat > internal/collector/collector.go << 'EOF'
-package collector
-
-import (
-	"time"
-	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/shirou/gopsutil/v4/mem"
-	"github.com/monitorly-app/probe/internal/config"
-)
-
-type Collector struct {
-	config *config.Config
-}
-
-type Metric struct {
-	Timestamp string      `json:"timestamp"`
-	Category  string      `json:"category"`
-	Name      string      `json:"name"`
-	Value     interface{} `json:"value"`
-}
-
-func New(cfg *config.Config) *Collector {
-	return &Collector{config: cfg}
-}
-
-func (c *Collector) Collect() ([]Metric, error) {
-	var metrics []Metric
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	// CPU metrics
-	if c.config.Collection.CPU.Enabled {
-		cpuPercent, err := cpu.Percent(time.Second, false)
-		if err == nil && len(cpuPercent) > 0 {
-			metrics = append(metrics, Metric{
-				Timestamp: now,
-				Category:  "system",
-				Name:      "cpu_usage",
-				Value:     cpuPercent[0],
-			})
-		}
-	}
-
-	// RAM metrics
-	if c.config.Collection.RAM.Enabled {
-		memInfo, err := mem.VirtualMemory()
-		if err == nil {
-			metrics = append(metrics, Metric{
-				Timestamp: now,
-				Category:  "system",
-				Name:      "memory_usage",
-				Value: map[string]interface{}{
-					"total":   memInfo.Total,
-					"used":    memInfo.Used,
-					"percent": memInfo.UsedPercent,
-				},
-			})
-		}
-	}
-
-	return metrics, nil
-}
-EOF
-
-cat > internal/sender/sender.go << 'EOF'
-package sender
-
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"time"
-	"github.com/monitorly-app/probe/internal/config"
-	"github.com/monitorly-app/probe/internal/collector"
-)
-
-type Sender struct {
-	config *config.Config
-	client *http.Client
-}
-
-type Payload struct {
-	MachineName string             `json:"machine_name"`
-	Metrics     []collector.Metric `json:"metrics"`
-}
-
-func New(cfg *config.Config) *Sender {
-	return &Sender{
-		config: cfg,
-		client: &http.Client{Timeout: 30 * time.Second},
-	}
-}
-
-func (s *Sender) Send(metrics []collector.Metric) error {
-	if len(metrics) == 0 {
-		return nil
-	}
-
-	payload := Payload{
-		MachineName: s.config.MachineName,
-		Metrics:     metrics,
-	}
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %v", err)
-	}
-
-	url := fmt.Sprintf("%s/%s", s.config.API.URL, s.config.API.OrganizationID)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.config.API.ApplicationToken)
-	req.Header.Set("User-Agent", "Monitorly-Probe/1.0.0")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	return nil
-}
-EOF
-
-echo "🔨 Compilation..."
-
-# Télécharger les dépendances
-go mod tidy
-
-# Compiler avec les bonnes options
-export CGO_ENABLED=0
-export GOOS=linux
-export GOARCH=$GOARCH
-
-BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-COMMIT="local-$(date +%s)"
-VERSION="v1.0.0-local"
-
-LDFLAGS="-s -w"
-LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.Version=$VERSION'"
-LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.BuildDate=$BUILD_DATE'"
-LDFLAGS="$LDFLAGS -X 'github.com/monitorly-app/probe/internal/version.Commit=$COMMIT'"
-
-if ! go build -v -a -installsuffix cgo -trimpath -ldflags="$LDFLAGS" -o monitorly-probe ./cmd/probe; then
-    echo "❌ Erreur lors de la compilation"
-    exit 1
-fi
-
-echo "✅ Compilation réussie"
-
-# Installer le binaire
-sudo mv monitorly-probe /usr/local/bin/monitorly-probe
-sudo chmod +x /usr/local/bin/monitorly-probe
-
-# Nettoyer
-cd /
-rm -rf "$TEMP_DIR"
-
-echo "✅ Binaire installé dans /usr/local/bin/monitorly-probe"
-
-# Créer les répertoires nécessaires
-sudo mkdir -p /etc/monitorly
-sudo mkdir -p /var/log/monitorly
-sudo mkdir -p /var/lib/monitorly
-
-# Créer le service systemd
-echo "🔧 Configuration du service systemd..."
-sudo tee /etc/systemd/system/monitorly-probe.service > /dev/null <<EOF
-[Unit]
+      # Create service file content
+      SERVICE_CONTENT="[Unit]
 Description=Monitorly Probe - System Monitoring Agent
-Documentation=https://github.com/monitorly-app/probe
 After=network.target
-Wants=network.target
 
 [Service]
-Type=simple
-User=root
-Group=root
-ExecStart=/usr/local/bin/monitorly-probe -config /etc/monitorly/config.yaml
-ExecReload=/bin/kill -HUP \$MAINPID
+ExecStart=${INSTALL_DIR}/monitorly-probe
 Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=monitorly-probe
-
-# Sécurité
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=/var/log/monitorly /var/lib/monitorly /etc/monitorly
+# Consider creating a dedicated user for security
+# User=monitorly
+# Group=monitorly
 
 [Install]
-WantedBy=multi-user.target
-EOF
+WantedBy=multi-user.target"
 
-# Recharger systemd
-sudo systemctl daemon-reload
+      # Write service file
+      if [ "$USE_SUDO" = true ]; then
+        echo "${SERVICE_CONTENT}" | sudo tee "${SERVICE_FILE}" > /dev/null
+        sudo systemctl daemon-reload
+        sudo systemctl enable "${SERVICE_NAME}"
+        success "Created systemd service. You can start it with: sudo systemctl start ${SERVICE_NAME}"
+      else
+        echo "${SERVICE_CONTENT}" > "${SERVICE_FILE}"
+        systemctl daemon-reload
+        systemctl enable "${SERVICE_NAME}"
+        success "Created systemd service. You can start it with: systemctl start ${SERVICE_NAME}"
+      fi
+      ;;
 
-echo "✅ Service systemd configuré"
-echo ""
-echo "🎉 Installation terminée avec succès !"
-echo ""
-echo "📋 Prochaines étapes :"
-echo "  1. Configurez /etc/monitorly/config.yaml"
-echo "  2. Démarrez le service: sudo systemctl start monitorly-probe"
-echo "  3. Activez le démarrage automatique: sudo systemctl enable monitorly-probe"
-echo ""
-echo "🔧 Commandes utiles :"
-echo "  • Status: sudo systemctl status monitorly-probe"
-echo "  • Logs: sudo journalctl -u monitorly-probe -f"
-echo "  • Version: monitorly-probe -version"
+    sysv)
+      info "Creating SysV init script..."
+      INIT_SCRIPT="${SERVICE_DIR}/monitorly-probe"
+
+      # Create init script content
+      INIT_SCRIPT_CONTENT="#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          monitorly-probe
+# Required-Start:    \$network \$remote_fs \$syslog
+# Required-Stop:     \$network \$remote_fs \$syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Monitorly Probe - System Monitoring Agent
+# Description:       Monitorly Probe collects system metrics and sends them to a central API.
+### END INIT INFO
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+DESC=\"Monitorly Probe\"
+NAME=monitorly-probe
+DAEMON=${INSTALL_DIR}/monitorly-probe
+PIDFILE=/var/run/\$NAME.pid
+
+case \"\$1\" in
+  start)
+    echo \"Starting \$DESC\"
+    start-stop-daemon --start --background --make-pidfile --pidfile \$PIDFILE --exec \$DAEMON
+    ;;
+  stop)
+    echo \"Stopping \$DESC\"
+    start-stop-daemon --stop --pidfile \$PIDFILE --retry=TERM/30/KILL/5
+    rm -f \$PIDFILE
+    ;;
+  restart)
+    \$0 stop
+    sleep 1
+    \$0 start
+    ;;
+  status)
+    if [ -f \$PIDFILE ]; then
+      PID=\$(cat \$PIDFILE)
+      if ps -p \$PID > /dev/null; then
+        echo \"\$DESC is running (PID: \$PID)\"
+        exit 0
+      else
+        echo \"\$DESC is not running (stale PID file)\"
+        exit 1
+      fi
+    else
+      echo \"\$DESC is not running\"
+      exit 3
+    fi
+    ;;
+  *)
+    echo \"Usage: \$0 {start|stop|restart|status}\"
+    exit 1
+    ;;
+esac
+
+exit 0"
+
+      # Write init script
+      if [ "$USE_SUDO" = true ]; then
+        echo "${INIT_SCRIPT_CONTENT}" | sudo tee "${INIT_SCRIPT}" > /dev/null
+        sudo chmod +x "${INIT_SCRIPT}"
+        if command -v update-rc.d >/dev/null 2>&1; then
+          sudo update-rc.d monitorly-probe defaults
+        elif command -v chkconfig >/dev/null 2>&1; then
+          sudo chkconfig --add monitorly-probe
+        fi
+        success "Created SysV init script. You can start it with: sudo service monitorly-probe start"
+      else
+        echo "${INIT_SCRIPT_CONTENT}" > "${INIT_SCRIPT}"
+        chmod +x "${INIT_SCRIPT}"
+        if command -v update-rc.d >/dev/null 2>&1; then
+          update-rc.d monitorly-probe defaults
+        elif command -v chkconfig >/dev/null 2>&1; then
+          chkconfig --add monitorly-probe
+        fi
+        success "Created SysV init script. You can start it with: service monitorly-probe start"
+      fi
+      ;;
+
+    *)
+      warning "Automatic service installation is not supported for your system."
+      info "You can run the probe manually with: ${INSTALL_DIR}/monitorly-probe"
+      ;;
+  esac
+}
+
+# Set up distribution-specific configurations
+setup_distro_specific() {
+  case "$DISTRO_FAMILY" in
+    redhat)
+      info "Setting up Red Hat family specific configurations..."
+
+      # For SELinux systems, set the proper context
+      if command -v sestatus >/dev/null 2>&1 && sestatus | grep -q "SELinux status: *enabled"; then
+        if [ "$USE_SUDO" = true ]; then
+          info "SELinux detected, setting appropriate context"
+          sudo chcon -t bin_t "${INSTALL_DIR}/monitorly-probe"
+        fi
+      fi
+
+      # Create logrotate configuration
+      if [ -d /etc/logrotate.d ]; then
+        LOGROTATE_CONFIG="/etc/logrotate.d/monitorly-probe"
+        LOGROTATE_CONTENT="${CONFIG_DIR}/logs/*.log {
+    weekly
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+}"
+        if [ "$USE_SUDO" = true ]; then
+          echo "${LOGROTATE_CONTENT}" | sudo tee "${LOGROTATE_CONFIG}" > /dev/null
+          success "Created logrotate configuration"
+        fi
+      fi
+      ;;
+
+    debian)
+      info "Setting up Debian family specific configurations..."
+
+      # Create logrotate configuration
+      if [ -d /etc/logrotate.d ]; then
+        LOGROTATE_CONFIG="/etc/logrotate.d/monitorly-probe"
+        LOGROTATE_CONTENT="${CONFIG_DIR}/logs/*.log {
+    weekly
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+}"
+        if [ "$USE_SUDO" = true ]; then
+          echo "${LOGROTATE_CONTENT}" | sudo tee "${LOGROTATE_CONFIG}" > /dev/null
+          success "Created logrotate configuration"
+        fi
+      fi
+      ;;
+
+    *)
+      info "No distribution-specific configurations to apply"
+      ;;
+  esac
+}
+
+# Display post-installation instructions
+show_instructions() {
+  echo
+  echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}       Monitorly Probe Installation Complete!${NC}"
+  echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
+  echo
+  echo -e "The probe has been installed to: ${BLUE}${INSTALL_DIR}/monitorly-probe${NC}"
+  echo -e "Configuration file: ${BLUE}${CONFIG_DIR}/config.yaml${NC}"
+  echo
+  echo -e "${YELLOW}IMPORTANT:${NC} Before starting the service, please review and edit your configuration:"
+  echo -e "  ${BLUE}vim ${CONFIG_DIR}/config.yaml${NC}"
+  echo
+  echo -e "Specifically, if you want to send metrics to the Monitorly API, edit these settings:"
+  echo -e "  1. Change ${BLUE}sender.target${NC} to ${BLUE}\"api\"${NC}"
+  echo -e "  2. Set your ${BLUE}api.organization_id${NC} and ${BLUE}api.application_token${NC}"
+  echo
+
+  # Display service-specific instructions
+  case "$INIT_SYSTEM" in
+    systemd)
+      echo -e "To manage the Monitorly Probe service:"
+      echo -e "  ${BLUE}sudo systemctl start monitorly-probe${NC}   # Start the service"
+      echo -e "  ${BLUE}sudo systemctl stop monitorly-probe${NC}    # Stop the service"
+      echo -e "  ${BLUE}sudo systemctl status monitorly-probe${NC}  # Check status"
+      echo -e "  ${BLUE}sudo journalctl -u monitorly-probe${NC}     # View logs"
+      ;;
+    sysv)
+      echo -e "To manage the Monitorly Probe service:"
+      echo -e "  ${BLUE}sudo service monitorly-probe start${NC}    # Start the service"
+      echo -e "  ${BLUE}sudo service monitorly-probe stop${NC}     # Stop the service"
+      echo -e "  ${BLUE}sudo service monitorly-probe status${NC}   # Check status"
+      echo -e "  ${BLUE}tail -f ${CONFIG_DIR}/logs/monitorly.log${NC} # View logs"
+      ;;
+    *)
+      echo -e "To run Monitorly Probe manually:"
+      echo -e "  ${BLUE}${INSTALL_DIR}/monitorly-probe${NC}"
+      echo -e "Log files will be created in: ${BLUE}${CONFIG_DIR}/logs/${NC}"
+      ;;
+  esac
+
+  echo
+  echo -e "Visit ${BLUE}https://github.com/monitorly-app/probe${NC} for more information."
+  echo -e "${GREEN}═════════════════════════════════════════════════════════${NC}"
+}
+
+# Main installation process
+main() {
+  echo -e "${GREEN}═════════════════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}                Monitorly Probe Installer                ${NC}"
+  echo -e "${GREEN}═════════════════════════════════════════════════════════${NC}"
+  echo
+
+  parse_args "$@"
+  check_dependencies
+  detect_platform
+  get_latest_release
+  download_and_install
+  download_config
+  setup_service
+  setup_distro_specific
+  show_instructions
+}
+
+# Pass all arguments to main
+main "$@"
